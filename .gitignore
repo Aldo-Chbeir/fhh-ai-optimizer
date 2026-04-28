@@ -25,7 +25,11 @@ Thumbs.db
 # Claude Code per-machine state
 .claude/settings.local.json
 
-# Trained model artifacts (not committed; rebuild via `python -m backend.ml.train_anomaly`
-# and `python -m backend.ml.train_risk`)
-models/*
+# Trained model artifacts (not committed; rebuild via the train_* commands).
+# The .gitkeep files keep empty directories tracked so a fresh clone has
+# the right folder layout for joblib to write into.
+models/**/*.pkl
+models/**/*.joblib
+models/**/*.json
 !models/.gitkeep
+!models/**/.gitkeep

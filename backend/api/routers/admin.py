@@ -69,3 +69,38 @@ async def retrain(
         "risk_seconds": timings["risk_seconds"],
         "total_seconds": round(timings["anomaly_seconds"] + timings["risk_seconds"], 2),
     }
+
+
+@router.post("/retrain-demand")
+async def retrain_demand(
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    """Retrain the 185 Prophet demand models.
+
+    Steps:
+      1. Re-fit Prophet on every (market, sku) combo using the latest
+         `demand_history` rows.
+      2. Reset the API's cached "Prophet pipeline available" flag and the
+         predictor's loaded-model cache so subsequent /forecast calls pick
+         up the freshly persisted models.
+    """
+    _check_token(x_admin_token)
+
+    def _run() -> dict:
+        from backend.demand_ml import train as demand_train  # noqa: WPS433
+        t1 = time.perf_counter()
+        rc = demand_train.main()
+        elapsed = round(time.perf_counter() - t1, 2)
+        # Drop cached availability flag + cached predictor models.
+        from backend.api.services import demand_prophet  # noqa: WPS433
+        demand_prophet.reset_cache()
+        return {"return_code": rc, "seconds": elapsed}
+
+    log.info("admin: retrain-demand triggered")
+    result = await asyncio.to_thread(_run)
+    log.info("admin: retrain-demand finished | %s", result)
+
+    return {
+        "status": "ok" if result["return_code"] == 0 else "partial",
+        "seconds": result["seconds"],
+    }
