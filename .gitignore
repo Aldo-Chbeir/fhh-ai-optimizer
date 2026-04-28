@@ -24,3 +24,8 @@ Thumbs.db
 
 # Claude Code per-machine state
 .claude/settings.local.json
+
+# Trained model artifacts (not committed; rebuild via `python -m backend.ml.train_anomaly`
+# and `python -m backend.ml.train_risk`)
+models/*
+!models/.gitkeep

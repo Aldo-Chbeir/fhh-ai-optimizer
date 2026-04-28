@@ -21,6 +21,7 @@ from .db import close_pool, init_pool, db_health
 from .errors import register_handlers
 from .logging_middleware import AccessLogMiddleware, configure_logging
 from .routers import (
+    admin as admin_router,
     alerts as alerts_router,
     chat as chat_router,
     components as components_router,
@@ -104,6 +105,7 @@ app.include_router(alerts_router.machine_router)
 app.include_router(demand_router.router)
 app.include_router(chat_router.router)
 app.include_router(kpis_router.router)
+app.include_router(admin_router.router)
 
 
 @app.get("/", include_in_schema=False)

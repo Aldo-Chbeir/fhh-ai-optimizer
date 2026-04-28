@@ -5,13 +5,16 @@ import asyncpg
 
 from ..db import get_conn
 from ..errors import ComponentNotFound, MachineNotFound
-from ..models import RiskScore, ComponentRiskScore, SensorContribution
+from ..models import (
+    RiskScore, ComponentRiskScore, SensorContribution,
+    PredictionList, Prediction,
+)
 from ..services.constants import VALID_COMPONENT_IDS, VALID_MACHINE_IDS
 from ..services.risk import (
-    component_risk, machine_risk, top_contributing_sensors, now_iso,
+    component_risk, component_risk_full, machine_risk,
+    top_contributing_sensors, now_iso,
 )
 from ..services.predictions import predictions_for_machine
-from ..models import PredictionList, Prediction
 
 router = APIRouter(prefix="/machines/{machine_id}", tags=["maintenance"])
 
@@ -47,7 +50,6 @@ async def get_component_risk_score(
     if component_id not in VALID_COMPONENT_IDS:
         raise ComponentNotFound(machine_id, component_id)
 
-    # Confirm this component exists for the given machine.
     exists = await conn.fetchval(
         """
         SELECT 1 FROM components
@@ -58,16 +60,18 @@ async def get_component_risk_score(
     if not exists:
         raise ComponentNotFound(machine_id, component_id)
 
-    score, tier, window = await component_risk(conn, machine_id, component_id)
+    # Single full inference call covers score, tier, window, AND
+    # contributing-feature ranking — saves a second model load.
+    payload = await component_risk_full(conn, machine_id, component_id)
     contributions = await top_contributing_sensors(conn, machine_id, component_id)
     return ComponentRiskScore(
         machine_id=machine_id,
         component_id=component_id,
-        score=score,
-        tier=tier,
-        predicted_failure_window_hours=window,
+        score=payload["score"],
+        tier=payload["tier"],
+        predicted_failure_window_hours=payload["predicted_failure_window_hours"],
         top_contributing_sensors=[SensorContribution(**c) for c in contributions],
-        last_updated=now_iso(),
+        last_updated=payload.get("as_of") or now_iso(),
     )
 
 

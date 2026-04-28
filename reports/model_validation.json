@@ -1,0 +1,565 @@
+{
+  "model_version": "0.1.0",
+  "generated_at": "2026-04-28T12:00:29Z",
+  "data_min": "2025-04-25T00:00:00+00:00",
+  "data_max": "2026-04-24T23:55:00+00:00",
+  "train_split": "2026-02-10T23:56:00+00:00",
+  "n_holdout": 7008,
+  "holdout_overall_mae": 5.83,
+  "metrics_warning_threshold": {
+    "threshold": 60.0,
+    "tp": 114,
+    "fp": 10,
+    "tn": 6544,
+    "fn": 340,
+    "precision": 0.919,
+    "recall": 0.251,
+    "f1": 0.394
+  },
+  "metrics_critical_threshold": {
+    "threshold": 85.0,
+    "tp": 23,
+    "fp": 9,
+    "tn": 6814,
+    "fn": 162,
+    "precision": 0.719,
+    "recall": 0.124,
+    "f1": 0.212
+  },
+  "calibration_buckets": [
+    {
+      "bucket": "0-29",
+      "count": 6234,
+      "actual_failure_rate": 0.004812319538017324,
+      "mean_predicted_score": 1.7000000476837158
+    },
+    {
+      "bucket": "30-59",
+      "count": 650,
+      "actual_failure_rate": 0.47692307692307695,
+      "mean_predicted_score": 46.52000045776367
+    },
+    {
+      "bucket": "60-84",
+      "count": 92,
+      "actual_failure_rate": 0.8913043478260869,
+      "mean_predicted_score": 76.44000244140625
+    },
+    {
+      "bucket": "85-100",
+      "count": 32,
+      "actual_failure_rate": 1.0,
+      "mean_predicted_score": 88.56999969482422
+    }
+  ],
+  "feature_importance_top20": [
+    {
+      "feature": "machine__anom_density_24h",
+      "importance": 0.30245
+    },
+    {
+      "feature": "yankee_steam_pressure__roll1h_mean",
+      "importance": 0.06186
+    },
+    {
+      "feature": "yankee_steam_pressure__roll7d_mean",
+      "importance": 0.06173
+    },
+    {
+      "feature": "yankee_steam_pressure__roll24h_mean",
+      "importance": 0.05427
+    },
+    {
+      "feature": "yankee_steam_pressure__anom_density_24h",
+      "importance": 0.03147
+    },
+    {
+      "feature": "visconip_felt_moisture__anom_density_24h",
+      "importance": 0.02246
+    },
+    {
+      "feature": "aircap_inlet_temp__anom_density_24h",
+      "importance": 0.02054
+    },
+    {
+      "feature": "rewinder_speed__zscore30d",
+      "importance": 0.01995
+    },
+    {
+      "feature": "anomaly_score",
+      "importance": 0.0183
+    },
+    {
+      "feature": "yankee_blade_pressure__roll7d_mean",
+      "importance": 0.01777
+    },
+    {
+      "feature": "yankee_vibration_bearing_1__anom_density_24h",
+      "importance": 0.01745
+    },
+    {
+      "feature": "yankee_vibration_bearing_1__roll7d_mean",
+      "importance": 0.01483
+    },
+    {
+      "feature": "yankee_vibration_bearing_1__roll1h_mean",
+      "importance": 0.01448
+    },
+    {
+      "feature": "yankee_vibration_bearing_1__roll24h_mean",
+      "importance": 0.01299
+    },
+    {
+      "feature": "yankee_blade_pressure__roll1h_mean",
+      "importance": 0.01134
+    },
+    {
+      "feature": "component__days_since_install",
+      "importance": 0.01093
+    },
+    {
+      "feature": "yankee_surface_temp__anom_density_24h",
+      "importance": 0.01059
+    },
+    {
+      "feature": "yankee_blade_pressure__roll24h_mean",
+      "importance": 0.01041
+    },
+    {
+      "feature": "yankee_vibration_bearing_1__roll7d_std",
+      "importance": 0.00994
+    },
+    {
+      "feature": "rewinder_speed__roll6h_mean",
+      "importance": 0.00829
+    }
+  ],
+  "per_component": [
+    {
+      "machine_id": "al-nakheel",
+      "component_id": "headbox",
+      "n": 292,
+      "mae": 1.63,
+      "warning_f1": 1.0,
+      "critical_f1": 0.7,
+      "max_predicted": 88.18000030517578,
+      "max_actual": 100.0
+    },
+    {
+      "machine_id": "al-nakheel",
+      "component_id": "visconip",
+      "n": 292,
+      "mae": 1.29,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.3700000047683716,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-nakheel",
+      "component_id": "yankee",
+      "n": 292,
+      "mae": 8.22,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 77.16999816894531,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-nakheel",
+      "component_id": "aircap",
+      "n": 292,
+      "mae": 1.29,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.2899999618530273,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-nakheel",
+      "component_id": "softreel",
+      "n": 292,
+      "mae": 1.29,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.2899999618530273,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-nakheel",
+      "component_id": "rewinder",
+      "n": 292,
+      "mae": 1.29,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.3700000047683716,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-bardi",
+      "component_id": "headbox",
+      "n": 292,
+      "mae": 1.0,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.2899999618530273,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-bardi",
+      "component_id": "visconip",
+      "n": 292,
+      "mae": 8.45,
+      "warning_f1": 0.911,
+      "critical_f1": 0.095,
+      "max_predicted": 86.25,
+      "max_actual": 100.0
+    },
+    {
+      "machine_id": "al-bardi",
+      "component_id": "yankee",
+      "n": 292,
+      "mae": 8.52,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 45.040000915527344,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-bardi",
+      "component_id": "aircap",
+      "n": 292,
+      "mae": 1.29,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.2899999618530273,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-bardi",
+      "component_id": "softreel",
+      "n": 292,
+      "mae": 1.23,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.2899999618530273,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-bardi",
+      "component_id": "rewinder",
+      "n": 292,
+      "mae": 11.96,
+      "warning_f1": 0.115,
+      "critical_f1": 0.19,
+      "max_predicted": 88.18000030517578,
+      "max_actual": 100.0
+    },
+    {
+      "machine_id": "al-sindian",
+      "component_id": "headbox",
+      "n": 292,
+      "mae": 0.95,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.2899999618530273,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-sindian",
+      "component_id": "visconip",
+      "n": 292,
+      "mae": 1.29,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.2899999618530273,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-sindian",
+      "component_id": "yankee",
+      "n": 292,
+      "mae": 30.82,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 45.040000915527344,
+      "max_actual": 100.0
+    },
+    {
+      "machine_id": "al-sindian",
+      "component_id": "aircap",
+      "n": 292,
+      "mae": 1.23,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.2899999618530273,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-sindian",
+      "component_id": "softreel",
+      "n": 292,
+      "mae": 1.02,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.2899999618530273,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-sindian",
+      "component_id": "rewinder",
+      "n": 292,
+      "mae": 10.21,
+      "warning_f1": 0.339,
+      "critical_f1": 0.0,
+      "max_predicted": 83.61000061035156,
+      "max_actual": 100.0
+    },
+    {
+      "machine_id": "al-snobar",
+      "component_id": "headbox",
+      "n": 292,
+      "mae": 1.21,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.2899999618530273,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-snobar",
+      "component_id": "visconip",
+      "n": 292,
+      "mae": 1.26,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.2899999618530273,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-snobar",
+      "component_id": "yankee",
+      "n": 292,
+      "mae": 31.95,
+      "warning_f1": 0.349,
+      "critical_f1": 0.255,
+      "max_predicted": 88.18000030517578,
+      "max_actual": 100.0
+    },
+    {
+      "machine_id": "al-snobar",
+      "component_id": "aircap",
+      "n": 292,
+      "mae": 1.29,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.2899999618530273,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-snobar",
+      "component_id": "softreel",
+      "n": 292,
+      "mae": 1.26,
+      "warning_f1": 0.0,
+      "critical_f1": 0.0,
+      "max_predicted": 1.2899999618530273,
+      "max_actual": 0.0
+    },
+    {
+      "machine_id": "al-snobar",
+      "component_id": "rewinder",
+      "n": 292,
+      "mae": 9.92,
+      "warning_f1": 0.676,
+      "critical_f1": 0.438,
+      "max_predicted": 100.0,
+      "max_actual": 100.0
+    }
+  ],
+  "training_metadata": {
+    "feature_names": [
+      "headbox_stock_temp__roll1h_mean",
+      "headbox_stock_temp__roll1h_std",
+      "headbox_stock_temp__roll6h_mean",
+      "headbox_stock_temp__roll6h_std",
+      "headbox_stock_temp__roll24h_mean",
+      "headbox_stock_temp__roll24h_std",
+      "headbox_stock_temp__roll7d_mean",
+      "headbox_stock_temp__roll7d_std",
+      "headbox_stock_temp__slope24h",
+      "headbox_stock_temp__slope7d",
+      "headbox_stock_temp__zscore30d",
+      "headbox_stock_temp__anom_density_24h",
+      "qcs_softness_index__roll1h_mean",
+      "qcs_softness_index__roll1h_std",
+      "qcs_softness_index__roll6h_mean",
+      "qcs_softness_index__roll6h_std",
+      "qcs_softness_index__roll24h_mean",
+      "qcs_softness_index__roll24h_std",
+      "qcs_softness_index__roll7d_mean",
+      "qcs_softness_index__roll7d_std",
+      "qcs_softness_index__slope24h",
+      "qcs_softness_index__slope7d",
+      "qcs_softness_index__zscore30d",
+      "qcs_softness_index__anom_density_24h",
+      "component__hours_since_maint",
+      "component__days_since_install",
+      "component__lifetime_pct",
+      "machine__anom_density_24h",
+      "anomaly_score",
+      "visconip_nip_pressure__roll1h_mean",
+      "visconip_nip_pressure__roll1h_std",
+      "visconip_nip_pressure__roll6h_mean",
+      "visconip_nip_pressure__roll6h_std",
+      "visconip_nip_pressure__roll24h_mean",
+      "visconip_nip_pressure__roll24h_std",
+      "visconip_nip_pressure__roll7d_mean",
+      "visconip_nip_pressure__roll7d_std",
+      "visconip_nip_pressure__slope24h",
+      "visconip_nip_pressure__slope7d",
+      "visconip_nip_pressure__zscore30d",
+      "visconip_nip_pressure__anom_density_24h",
+      "visconip_felt_moisture__roll1h_mean",
+      "visconip_felt_moisture__roll1h_std",
+      "visconip_felt_moisture__roll6h_mean",
+      "visconip_felt_moisture__roll6h_std",
+      "visconip_felt_moisture__roll24h_mean",
+      "visconip_felt_moisture__roll24h_std",
+      "visconip_felt_moisture__roll7d_mean",
+      "visconip_felt_moisture__roll7d_std",
+      "visconip_felt_moisture__slope24h",
+      "visconip_felt_moisture__slope7d",
+      "visconip_felt_moisture__zscore30d",
+      "visconip_felt_moisture__anom_density_24h",
+      "yankee_surface_temp__roll1h_mean",
+      "yankee_surface_temp__roll1h_std",
+      "yankee_surface_temp__roll6h_mean",
+      "yankee_surface_temp__roll6h_std",
+      "yankee_surface_temp__roll24h_mean",
+      "yankee_surface_temp__roll24h_std",
+      "yankee_surface_temp__roll7d_mean",
+      "yankee_surface_temp__roll7d_std",
+      "yankee_surface_temp__slope24h",
+      "yankee_surface_temp__slope7d",
+      "yankee_surface_temp__zscore30d",
+      "yankee_surface_temp__anom_density_24h",
+      "yankee_steam_pressure__roll1h_mean",
+      "yankee_steam_pressure__roll1h_std",
+      "yankee_steam_pressure__roll6h_mean",
+      "yankee_steam_pressure__roll6h_std",
+      "yankee_steam_pressure__roll24h_mean",
+      "yankee_steam_pressure__roll24h_std",
+      "yankee_steam_pressure__roll7d_mean",
+      "yankee_steam_pressure__roll7d_std",
+      "yankee_steam_pressure__slope24h",
+      "yankee_steam_pressure__slope7d",
+      "yankee_steam_pressure__zscore30d",
+      "yankee_steam_pressure__anom_density_24h",
+      "yankee_vibration_bearing_1__roll1h_mean",
+      "yankee_vibration_bearing_1__roll1h_std",
+      "yankee_vibration_bearing_1__roll6h_mean",
+      "yankee_vibration_bearing_1__roll6h_std",
+      "yankee_vibration_bearing_1__roll24h_mean",
+      "yankee_vibration_bearing_1__roll24h_std",
+      "yankee_vibration_bearing_1__roll7d_mean",
+      "yankee_vibration_bearing_1__roll7d_std",
+      "yankee_vibration_bearing_1__slope24h",
+      "yankee_vibration_bearing_1__slope7d",
+      "yankee_vibration_bearing_1__zscore30d",
+      "yankee_vibration_bearing_1__anom_density_24h",
+      "yankee_vibration_bearing_2__roll1h_mean",
+      "yankee_vibration_bearing_2__roll1h_std",
+      "yankee_vibration_bearing_2__roll6h_mean",
+      "yankee_vibration_bearing_2__roll6h_std",
+      "yankee_vibration_bearing_2__roll24h_mean",
+      "yankee_vibration_bearing_2__roll24h_std",
+      "yankee_vibration_bearing_2__roll7d_mean",
+      "yankee_vibration_bearing_2__roll7d_std",
+      "yankee_vibration_bearing_2__slope24h",
+      "yankee_vibration_bearing_2__slope7d",
+      "yankee_vibration_bearing_2__zscore30d",
+      "yankee_vibration_bearing_2__anom_density_24h",
+      "yankee_vibration_bearing_3__roll1h_mean",
+      "yankee_vibration_bearing_3__roll1h_std",
+      "yankee_vibration_bearing_3__roll6h_mean",
+      "yankee_vibration_bearing_3__roll6h_std",
+      "yankee_vibration_bearing_3__roll24h_mean",
+      "yankee_vibration_bearing_3__roll24h_std",
+      "yankee_vibration_bearing_3__roll7d_mean",
+      "yankee_vibration_bearing_3__roll7d_std",
+      "yankee_vibration_bearing_3__slope24h",
+      "yankee_vibration_bearing_3__slope7d",
+      "yankee_vibration_bearing_3__zscore30d",
+      "yankee_vibration_bearing_3__anom_density_24h",
+      "yankee_blade_pressure__roll1h_mean",
+      "yankee_blade_pressure__roll1h_std",
+      "yankee_blade_pressure__roll6h_mean",
+      "yankee_blade_pressure__roll6h_std",
+      "yankee_blade_pressure__roll24h_mean",
+      "yankee_blade_pressure__roll24h_std",
+      "yankee_blade_pressure__roll7d_mean",
+      "yankee_blade_pressure__roll7d_std",
+      "yankee_blade_pressure__slope24h",
+      "yankee_blade_pressure__slope7d",
+      "yankee_blade_pressure__zscore30d",
+      "yankee_blade_pressure__anom_density_24h",
+      "aircap_inlet_temp__roll1h_mean",
+      "aircap_inlet_temp__roll1h_std",
+      "aircap_inlet_temp__roll6h_mean",
+      "aircap_inlet_temp__roll6h_std",
+      "aircap_inlet_temp__roll24h_mean",
+      "aircap_inlet_temp__roll24h_std",
+      "aircap_inlet_temp__roll7d_mean",
+      "aircap_inlet_temp__roll7d_std",
+      "aircap_inlet_temp__slope24h",
+      "aircap_inlet_temp__slope7d",
+      "aircap_inlet_temp__zscore30d",
+      "aircap_inlet_temp__anom_density_24h",
+      "aircap_energy__roll1h_mean",
+      "aircap_energy__roll1h_std",
+      "aircap_energy__roll6h_mean",
+      "aircap_energy__roll6h_std",
+      "aircap_energy__roll24h_mean",
+      "aircap_energy__roll24h_std",
+      "aircap_energy__roll7d_mean",
+      "aircap_energy__roll7d_std",
+      "aircap_energy__slope24h",
+      "aircap_energy__slope7d",
+      "aircap_energy__zscore30d",
+      "aircap_energy__anom_density_24h",
+      "softreel_tension__roll1h_mean",
+      "softreel_tension__roll1h_std",
+      "softreel_tension__roll6h_mean",
+      "softreel_tension__roll6h_std",
+      "softreel_tension__roll24h_mean",
+      "softreel_tension__roll24h_std",
+      "softreel_tension__roll7d_mean",
+      "softreel_tension__roll7d_std",
+      "softreel_tension__slope24h",
+      "softreel_tension__slope7d",
+      "softreel_tension__zscore30d",
+      "softreel_tension__anom_density_24h",
+      "rewinder_speed__roll1h_mean",
+      "rewinder_speed__roll1h_std",
+      "rewinder_speed__roll6h_mean",
+      "rewinder_speed__roll6h_std",
+      "rewinder_speed__roll24h_mean",
+      "rewinder_speed__roll24h_std",
+      "rewinder_speed__roll7d_mean",
+      "rewinder_speed__roll7d_std",
+      "rewinder_speed__slope24h",
+      "rewinder_speed__slope7d",
+      "rewinder_speed__zscore30d",
+      "rewinder_speed__anom_density_24h"
+    ],
+    "data_min": "2025-04-25T00:00:00+00:00",
+    "data_max": "2026-04-24T23:55:00+00:00",
+    "train_split": "2026-02-10T23:56:00+00:00",
+    "n_train": 25152,
+    "n_holdout": 7008,
+    "holdout_mae_raw": 7.885705670186496,
+    "holdout_rmse_raw": 15.677536310550613,
+    "holdout_mae_calibrated": 5.827141169662045
+  },
+  "evaluation_seconds": 272.97
+}

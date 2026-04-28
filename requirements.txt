@@ -6,3 +6,10 @@ fastapi>=0.110
 uvicorn[standard]>=0.27
 asyncpg>=0.29
 pydantic>=2.5
+
+# ML training & inference
+scikit-learn>=1.4
+xgboost>=2.0
+joblib>=1.3
+shap>=0.45
+pandas>=2.1

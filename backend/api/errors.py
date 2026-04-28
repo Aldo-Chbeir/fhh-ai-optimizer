@@ -110,6 +110,8 @@ def register_handlers(app: FastAPI) -> None:
         # Map common HTTP statuses to contract codes
         code_map = {
             400: "invalid_request",
+            401: "unauthorized",
+            403: "forbidden",
             404: "invalid_request",
             429: "rate_limited",
             503: "model_unavailable",
