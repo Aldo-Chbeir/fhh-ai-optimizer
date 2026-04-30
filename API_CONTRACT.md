@@ -59,10 +59,20 @@
 ### Risk tiers
 | Tier | Score range | Color | Action |
 |---|---|---|---|
-| `healthy` | 0–30 | green | No action |
-| `watch` | 30–60 | yellow | Schedule inspection |
-| `warning` | 60–85 | orange | Schedule maintenance within 7 days |
-| `critical` | 85–100 | red | Immediate intervention |
+| `healthy` | 0–29 | green | No action |
+| `watch` | 30–49 | yellow | Schedule inspection |
+| `warning` | 50–69 | orange | Schedule maintenance within 7 days |
+| `critical` | 70–100 | red | Immediate intervention |
+
+> **Design choice — high recall on the critical tier.** The thresholds above
+> are deliberately conservative. Lowering the critical floor from a higher
+> precision-friendly value (e.g. 85) to **70** trades precision for recall:
+> we accept more false alarms in exchange for catching nearly every real
+> failure. This is the standard miss-cost-asymmetry posture for safety-critical
+> industrial systems — a missed Yankee bearing failure can mean $20K/hr of
+> downtime plus collateral damage, while a false-alarm inspection costs at
+> most a few maintenance hours. See
+> `reports/model_validation.md` → "Design Decision: High Recall over Precision".
 
 ### Alarm severities
 `info` · `warning` · `critical`

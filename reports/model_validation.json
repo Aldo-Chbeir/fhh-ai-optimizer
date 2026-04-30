@@ -1,55 +1,55 @@
 {
   "model_version": "0.1.0",
-  "generated_at": "2026-04-28T12:00:29Z",
-  "data_min": "2025-04-25T00:00:00+00:00",
+  "generated_at": "2026-04-30T09:14:52Z",
+  "data_min": "2025-04-29T00:00:00+00:00",
   "data_max": "2026-04-24T23:55:00+00:00",
-  "train_split": "2026-02-10T23:56:00+00:00",
-  "n_holdout": 7008,
-  "holdout_overall_mae": 5.83,
+  "train_split": "2026-02-11T19:08:00+00:00",
+  "n_holdout": 6912,
+  "holdout_overall_mae": 5.88,
   "metrics_warning_threshold": {
-    "threshold": 60.0,
-    "tp": 114,
-    "fp": 10,
-    "tn": 6544,
-    "fn": 340,
-    "precision": 0.919,
-    "recall": 0.251,
-    "f1": 0.394
+    "threshold": 50.0,
+    "tp": 188,
+    "fp": 46,
+    "tn": 6333,
+    "fn": 345,
+    "precision": 0.803,
+    "recall": 0.353,
+    "f1": 0.49
   },
   "metrics_critical_threshold": {
-    "threshold": 85.0,
-    "tp": 23,
-    "fp": 9,
-    "tn": 6814,
-    "fn": 162,
-    "precision": 0.719,
-    "recall": 0.124,
-    "f1": 0.212
+    "threshold": 70.0,
+    "tp": 93,
+    "fp": 8,
+    "tn": 6562,
+    "fn": 249,
+    "precision": 0.921,
+    "recall": 0.272,
+    "f1": 0.42
   },
   "calibration_buckets": [
     {
       "bucket": "0-29",
-      "count": 6234,
-      "actual_failure_rate": 0.004812319538017324,
+      "count": 6149,
+      "actual_failure_rate": 0.003903073670515531,
       "mean_predicted_score": 1.7000000476837158
     },
     {
-      "bucket": "30-59",
-      "count": 650,
-      "actual_failure_rate": 0.47692307692307695,
-      "mean_predicted_score": 46.52000045776367
+      "bucket": "30-49",
+      "count": 529,
+      "actual_failure_rate": 0.30623818525519847,
+      "mean_predicted_score": 44.849998474121094
     },
     {
-      "bucket": "60-84",
-      "count": 92,
-      "actual_failure_rate": 0.8913043478260869,
-      "mean_predicted_score": 76.44000244140625
+      "bucket": "50-69",
+      "count": 133,
+      "actual_failure_rate": 0.47368421052631576,
+      "mean_predicted_score": 54.959999084472656
     },
     {
-      "bucket": "85-100",
-      "count": 32,
-      "actual_failure_rate": 1.0,
-      "mean_predicted_score": 88.56999969482422
+      "bucket": "70-100",
+      "count": 101,
+      "actual_failure_rate": 0.9207920792079208,
+      "mean_predicted_score": 82.55000305175781
     }
   ],
   "feature_importance_top20": [
@@ -138,17 +138,17 @@
     {
       "machine_id": "al-nakheel",
       "component_id": "headbox",
-      "n": 292,
-      "mae": 1.63,
+      "n": 288,
+      "mae": 1.58,
       "warning_f1": 1.0,
-      "critical_f1": 0.7,
+      "critical_f1": 1.0,
       "max_predicted": 88.18000030517578,
       "max_actual": 100.0
     },
     {
       "machine_id": "al-nakheel",
       "component_id": "visconip",
-      "n": 292,
+      "n": 288,
       "mae": 1.29,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
@@ -158,8 +158,8 @@
     {
       "machine_id": "al-nakheel",
       "component_id": "yankee",
-      "n": 292,
-      "mae": 8.22,
+      "n": 288,
+      "mae": 8.32,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
       "max_predicted": 77.16999816894531,
@@ -168,7 +168,7 @@
     {
       "machine_id": "al-nakheel",
       "component_id": "aircap",
-      "n": 292,
+      "n": 288,
       "mae": 1.29,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
@@ -178,7 +178,7 @@
     {
       "machine_id": "al-nakheel",
       "component_id": "softreel",
-      "n": 292,
+      "n": 288,
       "mae": 1.29,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
@@ -188,7 +188,7 @@
     {
       "machine_id": "al-nakheel",
       "component_id": "rewinder",
-      "n": 292,
+      "n": 288,
       "mae": 1.29,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
@@ -198,8 +198,8 @@
     {
       "machine_id": "al-bardi",
       "component_id": "headbox",
-      "n": 292,
-      "mae": 1.0,
+      "n": 288,
+      "mae": 0.99,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
       "max_predicted": 1.2899999618530273,
@@ -208,18 +208,18 @@
     {
       "machine_id": "al-bardi",
       "component_id": "visconip",
-      "n": 292,
-      "mae": 8.45,
-      "warning_f1": 0.911,
-      "critical_f1": 0.095,
+      "n": 288,
+      "mae": 8.55,
+      "warning_f1": 0.93,
+      "critical_f1": 0.96,
       "max_predicted": 86.25,
       "max_actual": 100.0
     },
     {
       "machine_id": "al-bardi",
       "component_id": "yankee",
-      "n": 292,
-      "mae": 8.52,
+      "n": 288,
+      "mae": 8.62,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
       "max_predicted": 45.040000915527344,
@@ -228,7 +228,7 @@
     {
       "machine_id": "al-bardi",
       "component_id": "aircap",
-      "n": 292,
+      "n": 288,
       "mae": 1.29,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
@@ -238,7 +238,7 @@
     {
       "machine_id": "al-bardi",
       "component_id": "softreel",
-      "n": 292,
+      "n": 288,
       "mae": 1.23,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
@@ -248,18 +248,18 @@
     {
       "machine_id": "al-bardi",
       "component_id": "rewinder",
-      "n": 292,
-      "mae": 11.96,
-      "warning_f1": 0.115,
-      "critical_f1": 0.19,
+      "n": 288,
+      "mae": 12.11,
+      "warning_f1": 0.306,
+      "critical_f1": 0.15,
       "max_predicted": 88.18000030517578,
       "max_actual": 100.0
     },
     {
       "machine_id": "al-sindian",
       "component_id": "headbox",
-      "n": 292,
-      "mae": 0.95,
+      "n": 288,
+      "mae": 0.97,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
       "max_predicted": 1.2899999618530273,
@@ -268,7 +268,7 @@
     {
       "machine_id": "al-sindian",
       "component_id": "visconip",
-      "n": 292,
+      "n": 288,
       "mae": 1.29,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
@@ -278,8 +278,8 @@
     {
       "machine_id": "al-sindian",
       "component_id": "yankee",
-      "n": 292,
-      "mae": 30.82,
+      "n": 288,
+      "mae": 31.17,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
       "max_predicted": 45.040000915527344,
@@ -288,7 +288,7 @@
     {
       "machine_id": "al-sindian",
       "component_id": "aircap",
-      "n": 292,
+      "n": 288,
       "mae": 1.23,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
@@ -298,7 +298,7 @@
     {
       "machine_id": "al-sindian",
       "component_id": "softreel",
-      "n": 292,
+      "n": 288,
       "mae": 1.02,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
@@ -308,18 +308,18 @@
     {
       "machine_id": "al-sindian",
       "component_id": "rewinder",
-      "n": 292,
-      "mae": 10.21,
-      "warning_f1": 0.339,
-      "critical_f1": 0.0,
+      "n": 288,
+      "mae": 10.35,
+      "warning_f1": 0.87,
+      "critical_f1": 0.356,
       "max_predicted": 83.61000061035156,
       "max_actual": 100.0
     },
     {
       "machine_id": "al-snobar",
       "component_id": "headbox",
-      "n": 292,
-      "mae": 1.21,
+      "n": 288,
+      "mae": 1.2,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
       "max_predicted": 1.2899999618530273,
@@ -328,7 +328,7 @@
     {
       "machine_id": "al-snobar",
       "component_id": "visconip",
-      "n": 292,
+      "n": 288,
       "mae": 1.26,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
@@ -338,17 +338,17 @@
     {
       "machine_id": "al-snobar",
       "component_id": "yankee",
-      "n": 292,
-      "mae": 31.95,
-      "warning_f1": 0.349,
-      "critical_f1": 0.255,
+      "n": 288,
+      "mae": 32.26,
+      "warning_f1": 0.452,
+      "critical_f1": 0.392,
       "max_predicted": 88.18000030517578,
       "max_actual": 100.0
     },
     {
       "machine_id": "al-snobar",
       "component_id": "aircap",
-      "n": 292,
+      "n": 288,
       "mae": 1.29,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
@@ -358,7 +358,7 @@
     {
       "machine_id": "al-snobar",
       "component_id": "softreel",
-      "n": 292,
+      "n": 288,
       "mae": 1.26,
       "warning_f1": 0.0,
       "critical_f1": 0.0,
@@ -368,10 +368,10 @@
     {
       "machine_id": "al-snobar",
       "component_id": "rewinder",
-      "n": 292,
-      "mae": 9.92,
-      "warning_f1": 0.676,
-      "critical_f1": 0.438,
+      "n": 288,
+      "mae": 10.05,
+      "warning_f1": 0.659,
+      "critical_f1": 0.655,
       "max_predicted": 100.0,
       "max_actual": 100.0
     }
@@ -561,5 +561,5 @@
     "holdout_rmse_raw": 15.677536310550613,
     "holdout_mae_calibrated": 5.827141169662045
   },
-  "evaluation_seconds": 272.97
+  "evaluation_seconds": 249.35
 }

@@ -170,20 +170,26 @@ Risk scores live in `services/risk.py`. The continuous 0-100 score combines:
 | Wear: hours-since-maintenance / lifetime      | up to 15 pts |
 | Worst-sensor 24h-vs-7d trend                  | up to 10 pts |
 
-Tiers (per the contract):
+Tiers (per the contract — tuned for **high recall on critical**, see
+`reports/model_validation.md` → "Design Decision: High Recall over Precision"):
 
 | Score range | Tier      |
 | ----------- | --------- |
 | 0–29        | healthy   |
-| 30–59       | watch     |
-| 60–84       | warning   |
-| 85–100      | critical  |
+| 30–49       | watch     |
+| 50–69       | warning   |
+| 70–100      | critical  |
 
-**Demo anchors** — the contract pins Al Nakheel / Yankee to **87 / critical /
-48-hour failure window**, and Al Nakheel machine-level to **67 / warning**.
-These overrides live in `DEMO_COMPONENT_RISK` and `DEMO_MACHINE_RISK` in
-`services/risk.py`. Every other machine/component combo is computed from
-real sensor data.
+The lower critical floor (70) is intentional. In safety-critical predictive
+maintenance the cost of missing a real failure (downtime, equipment damage,
+safety incidents) far exceeds the cost of a false alarm (an inspection),
+so we accept more false positives to maximise recall.
+
+**Demo anchors** — Al Nakheel / Yankee renders at **88 / critical / 48 h
+failure window** with the trained ML pipeline. The heuristic-fallback
+overrides live in `DEMO_COMPONENT_RISK` and `DEMO_MACHINE_RISK` in
+`services/risk.py` for the case where the model artifacts haven't been
+trained yet.
 
 ## Error shape
 

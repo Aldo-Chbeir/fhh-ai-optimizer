@@ -140,20 +140,23 @@ def _sensor_score(
 def _failure_window_hours(score: float) -> Optional[int]:
     """Map a 0-100 score to a predicted-failure-window in hours.
 
-    Mapping (snapped to coarse buckets so the UI shows clean numbers):
-      score ≥ 95   → 24 h
-      score 85-94  → 48 h
-      score 75-84  → 96 h  (≈ 4 days)
-      score 65-74  → 168 h (1 week)
-      score 60-64  → 240 h (~10 days)
-      score < 60   → None
+    Aligned with the high-recall tier scheme:
+      healthy <30  → None
+      watch 30-49  → None
+      warning 50-69
+        50-59      → 240 h (~10 days)
+        60-69      → 168 h (1 week)
+      critical 70+
+        70-79      → 96 h  (~4 days)
+        80-89      → 48 h  (2 days)
+        ≥ 90       → 24 h
     """
-    if score < 60:
+    if score < 50:
         return None
-    if score >= 95: return 24
-    if score >= 85: return 48
-    if score >= 75: return 96
-    if score >= 65: return 168
+    if score >= 90: return 24
+    if score >= 80: return 48
+    if score >= 70: return 96
+    if score >= 60: return 168
     return 240
 
 

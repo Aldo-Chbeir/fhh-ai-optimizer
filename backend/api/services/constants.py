@@ -46,11 +46,18 @@ MARKET_NAMES = {
 
 
 def tier_for(score: int) -> str:
-    """Bucket a 0-100 risk score into the four contract tiers."""
+    """Bucket a 0-100 risk score into the four contract tiers.
+
+    Thresholds tuned for HIGH RECALL on the critical tier — see
+    "Design Decision: High Recall over Precision" in
+    `reports/model_validation.md` and `API_CONTRACT.md` v1.1.
+
+      healthy <30, watch 30-49, warning 50-69, critical 70+
+    """
     if score < 30:
         return "healthy"
-    if score < 60:
+    if score < 50:
         return "watch"
-    if score < 85:
+    if score < 70:
         return "warning"
     return "critical"

@@ -98,7 +98,12 @@ predict_component_risk("al-nakheel", "yankee")
 #   }
 ```
 
-`tier` strictly follows API_CONTRACT.md v1.1:
-healthy <30, watch 30-59, warning 60-84, critical 85+.
+`tier` follows API_CONTRACT.md v1.1, tuned for **high recall on the critical
+tier** (industrial safety best practice):
+healthy <30 · watch 30-49 · warning 50-69 · critical 70+.
+
+The lower critical floor (70 instead of a precision-friendly 85) catches
+more real failures at the cost of more false alarms. See
+`reports/model_validation.md` → "Design Decision: High Recall over Precision".
 
 `predicted_failure_window_hours` is `None` for any score < 60.

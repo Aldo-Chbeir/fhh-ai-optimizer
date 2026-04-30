@@ -282,10 +282,14 @@ async def _heuristic_component_risk(
 
     score = await _derive_component_score(conn, machine_id, component_id)
     tier = tier_for(score)
+    # Failure-window matches the high-recall tiers (see backend/ml/predict.py
+    # `_failure_window_hours` for the canonical mapping).
     window: Optional[int] = None
-    if score >= 85:
+    if score >= 90:
         window = 24
-    elif score >= 60:
+    elif score >= 70:
+        window = 48
+    elif score >= 50:
         window = 168
     return score, tier, window
 

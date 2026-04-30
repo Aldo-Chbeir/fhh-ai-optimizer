@@ -159,13 +159,18 @@ XGBOOST_FIT = {
 }
 
 # ---------------------------------------------------------------------------
-# Risk tiers — these MUST match API_CONTRACT.md v1.1 (single source of truth)
+# Risk tiers — must match API_CONTRACT.md v1.1.
+#
+# Thresholds tuned for HIGH RECALL on the critical tier (industrial
+# safety best-practice — see the "Design Decision" section in
+# `reports/model_validation.md`). Lower critical floor (70) catches
+# more real failures at the cost of more false alarms.
 # ---------------------------------------------------------------------------
 TIER_THRESHOLDS = [
-    (0.0,  30.0, "healthy"),
-    (30.0, 60.0, "watch"),
-    (60.0, 85.0, "warning"),
-    (85.0, 101.0, "critical"),
+    (0.0,  30.0,  "healthy"),
+    (30.0, 50.0,  "watch"),
+    (50.0, 70.0,  "warning"),
+    (70.0, 101.0, "critical"),
 ]
 
 

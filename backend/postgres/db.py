@@ -36,11 +36,15 @@ COMPONENT_ORDER: list[str] = ["headbox", "visconip", "yankee", "aircap", "softre
 # -----------------------------------------------------------------------------
 
 def _tier_for(score: int) -> str:
+    """High-recall tier scheme — see backend/api/services/constants.py.
+
+    healthy <30, watch 30-49, warning 50-69, critical 70+
+    """
     if score < 30:
         return "healthy"
-    if score < 60:
+    if score < 50:
         return "watch"
-    if score < 85:
+    if score < 70:
         return "warning"
     return "critical"
 
