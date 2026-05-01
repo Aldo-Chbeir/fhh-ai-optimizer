@@ -75,10 +75,13 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",  # Next.js / CRA
-        "http://localhost:5173",  # Vite default
+        "http://localhost:3000",   # Next.js / CRA
+        "http://localhost:5173",   # Vite default
+        "http://localhost:8080",   # `python -m http.server 8080` (frontend dev)
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:8080",
+        "null",                    # opening index.html via file:// reports Origin: null
     ],
     allow_credentials=True,
     allow_methods=["*"],

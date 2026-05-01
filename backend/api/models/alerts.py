@@ -64,3 +64,19 @@ class MaintenanceLogEntry(BaseModel):
 class MaintenanceLogList(BaseModel):
     machine_id: str
     logs: list[MaintenanceLogEntry]
+
+
+class AlertsKPIs(BaseModel):
+    """UI extension for the Alerts triage screen — aggregate counters +
+    sparklines that the screen renders above the alert list. Not part of
+    API_CONTRACT.md v1.1 (intentional UI helper)."""
+
+    active_critical: int
+    critical_sparkline_7d: list[int]
+    active_warning: int
+    warning_sparkline_7d: list[int]
+    avg_response_time_minutes: int
+    avg_response_time_delta_minutes: int  # negative = faster than last week
+    acknowledged_today: int
+    acknowledged_today_total: int
+    last_updated: str

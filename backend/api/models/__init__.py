@@ -10,7 +10,11 @@ from .sensors import (
     SensorReading, SensorReadingList, SensorHistoryPoint, SensorHistory,
     NormalRange,
 )
-from .alerts import Alert, AlertList, Alarm, AlarmList, MaintenanceLogEntry, MaintenanceLogList
+from .alerts import (
+    Alert, AlertList, Alarm, AlarmList,
+    MaintenanceLogEntry, MaintenanceLogList,
+    AlertsKPIs,
+)
 from .demand import (
     Product, ProductList, Market, MarketList,
     ForecastPoint, SeasonalityEvent, Forecast,
@@ -35,7 +39,8 @@ __all__ = [
     "Machine", "MachineList",
     "Component", "ComponentList", "RiskScore", "ComponentRiskScore", "SensorContribution",
     "SensorReading", "SensorReadingList", "SensorHistoryPoint", "SensorHistory", "NormalRange",
-    "Alert", "AlertList", "Alarm", "AlarmList", "MaintenanceLogEntry", "MaintenanceLogList",
+    "Alert", "AlertList", "Alarm", "AlarmList", "MaintenanceLogEntry",
+    "MaintenanceLogList", "AlertsKPIs",
     "Product", "ProductList", "Market", "MarketList",
     "ForecastPoint", "SeasonalityEvent", "Forecast",
     "ScenarioRequest", "ScenarioResponse", "ScenarioBlock", "DeltaSummary",

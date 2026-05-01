@@ -11,7 +11,7 @@ from ..errors import AlertNotFound, MachineNotFound
 from ..models import (
     Alert, AlertList, AlarmList, Alarm,
     MaintenanceLogList, MaintenanceLogEntry,
-    AlarmSeverity, AlertSort,
+    AlarmSeverity, AlertSort, AlertsKPIs,
 )
 from ..services.alerts import list_alerts, get_alert
 from ..services.constants import VALID_MACHINE_IDS
@@ -47,6 +47,109 @@ async def get_alerts(
         alerts=[Alert(**a) for a in alerts],
         total=len(alerts),
         counts_by_tier=counts,
+    )
+
+
+@router.get("/alerts/kpis", response_model=AlertsKPIs)
+async def get_alerts_kpis(
+    conn: asyncpg.Connection = Depends(get_conn),
+) -> AlertsKPIs:
+    """UI extension — aggregate counters + 7-day sparklines for the
+    Alerts triage screen header. Not part of API_CONTRACT.md v1.1."""
+    # Active critical / warning counts (unresolved alarms)
+    crit_active = await conn.fetchval(
+        "SELECT COUNT(*) FROM alarm_events "
+        "WHERE severity='critical' AND resolved_at IS NULL"
+    ) or 0
+    warn_active = await conn.fetchval(
+        "SELECT COUNT(*) FROM alarm_events "
+        "WHERE severity='warning' AND resolved_at IS NULL"
+    ) or 0
+
+    # 7-day sparklines from alarm_events daily counts (newest day on the right)
+    spark_rows = await conn.fetch(
+        """
+        WITH days AS (
+          SELECT generate_series(
+            (SELECT date_trunc('day', MAX(timestamp)) FROM alarm_events) - INTERVAL '6 days',
+            (SELECT date_trunc('day', MAX(timestamp)) FROM alarm_events),
+            INTERVAL '1 day'
+          )::date AS d
+        )
+        SELECT
+          d,
+          COALESCE(SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END), 0) AS crit,
+          COALESCE(SUM(CASE WHEN severity='warning'  THEN 1 ELSE 0 END), 0) AS warn
+        FROM days
+        LEFT JOIN alarm_events e ON e.timestamp::date = d
+        GROUP BY d
+        ORDER BY d
+        """
+    )
+    crit_spark = [int(r["crit"]) for r in spark_rows] or [0] * 7
+    warn_spark = [int(r["warn"]) for r in spark_rows] or [0] * 7
+
+    # Avg response time = median minutes between alarm timestamp and resolved_at
+    avg_resp = await conn.fetchval(
+        """
+        SELECT COALESCE(
+          ROUND(EXTRACT(EPOCH FROM AVG(resolved_at - timestamp)) / 60),
+          0
+        )::int
+        FROM alarm_events
+        WHERE resolved_at IS NOT NULL
+          AND timestamp >= (SELECT MAX(timestamp) FROM alarm_events) - INTERVAL '7 days'
+        """
+    ) or 0
+    avg_resp_prev = await conn.fetchval(
+        """
+        SELECT COALESCE(
+          ROUND(EXTRACT(EPOCH FROM AVG(resolved_at - timestamp)) / 60),
+          0
+        )::int
+        FROM alarm_events
+        WHERE resolved_at IS NOT NULL
+          AND timestamp BETWEEN (SELECT MAX(timestamp) FROM alarm_events) - INTERVAL '14 days'
+                            AND (SELECT MAX(timestamp) FROM alarm_events) - INTERVAL '7 days'
+        """
+    ) or 0
+    delta = int(avg_resp) - int(avg_resp_prev)
+
+    # Acknowledged-today counts (where resolved_at falls on the latest day)
+    ack_today = await conn.fetchval(
+        """
+        SELECT COUNT(*) FROM alarm_events
+        WHERE resolved_at IS NOT NULL
+          AND resolved_at::date = (SELECT MAX(timestamp)::date FROM alarm_events)
+        """
+    ) or 0
+    ack_total = await conn.fetchval(
+        """
+        SELECT COUNT(*) FROM alarm_events
+        WHERE timestamp::date = (SELECT MAX(timestamp)::date FROM alarm_events)
+        """
+    ) or 0
+
+    last_updated = await conn.fetchval(
+        "SELECT MAX(timestamp) FROM alarm_events"
+    )
+    from datetime import datetime, timezone
+    last_iso = (
+        last_updated.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if last_updated else
+        datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+
+    return AlertsKPIs(
+        active_critical=int(crit_active),
+        critical_sparkline_7d=crit_spark,
+        active_warning=int(warn_active),
+        warning_sparkline_7d=warn_spark,
+        avg_response_time_minutes=int(avg_resp),
+        avg_response_time_delta_minutes=int(delta),
+        acknowledged_today=int(ack_today),
+        acknowledged_today_total=int(ack_total),
+        last_updated=last_iso,
     )
 
 
