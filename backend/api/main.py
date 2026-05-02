@@ -38,8 +38,32 @@ configure_logging("INFO")
 log = logging.getLogger("fhh.api")
 
 
+async def _warm_alert_risk_cache_bg() -> None:
+    """Fire-and-forget background warmup. Resolves the per-(machine,
+    component) risk for every pair in the fleet so the first /alerts
+    request after startup is served from a warm cache instead of paying
+    ~7 s of ML inference. Runs concurrently with the server accepting
+    requests; if a /alerts call lands before this finishes, it falls
+    back to on-demand resolution (slower but correct)."""
+    import asyncio, time
+    from .db import get_pool
+    from .services.alerts import warm_risk_cache
+    try:
+        # Tiny pause so the server's first request doesn't compete with the
+        # warmup on the same connection pool.
+        await asyncio.sleep(0.5)
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            t0 = time.perf_counter()
+            n = await warm_risk_cache(conn)
+            log.info("alerts risk-cache warmup: %d pairs in %.1fs", n, time.perf_counter() - t0)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("alerts risk-cache warmup skipped: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
     log.info("starting up | api_version=%s", __version__)
     await init_pool()
     health = await db_health()
@@ -55,6 +79,9 @@ async def lifespan(app: FastAPI):
         )
         if not health.get("timescaledb"):
             log.warning("TimescaleDB extension is NOT active — sensor history endpoints will degrade.")
+        # Background pre-warm: serve requests immediately, populate the
+        # alert-risk cache in parallel.
+        asyncio.create_task(_warm_alert_risk_cache_bg())
     try:
         yield
     finally:
