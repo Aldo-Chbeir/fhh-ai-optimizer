@@ -1,13 +1,15 @@
-"""Chat router — POST /chat (proxied to Anthropic), conversation get/delete,
-and the cold-start suggested-prompts endpoint."""
+"""Chat router — POST /chat (proxied to Anthropic with tool-use), conversation
+get/delete, and the cold-start suggested-prompts endpoint."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Body, Query, status
+import asyncpg
+from fastapi import APIRouter, Body, Depends, Query, status
 from fastapi.responses import JSONResponse, Response
 
+from ..db import get_conn
 from ..errors import ConversationNotFound
 from ..models import (
     ChatRequest, ChatResponse,
@@ -24,7 +26,10 @@ def _iso_now() -> str:
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def post_chat(body: ChatRequest = Body(...)):
+async def post_chat(
+    body: ChatRequest = Body(...),
+    conn: asyncpg.Connection = Depends(get_conn),
+):
     """Proxy a single user turn to Anthropic.
 
     Request shape (per API_CONTRACT.md v1.1):
@@ -57,10 +62,11 @@ async def post_chat(body: ChatRequest = Body(...)):
     )
 
     try:
-        result = chat_service.generate_reply(
+        result = await chat_service.generate_reply(
             history=history,
             screen_context=screen_context,
             screen_payload=screen_payload,
+            conn=conn,
         )
     except chat_service.ChatUnavailable as exc:
         return JSONResponse(

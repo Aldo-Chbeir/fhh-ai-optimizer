@@ -1,12 +1,18 @@
-"""Chat service — Anthropic-backed assistant.
+"""Chat service — Anthropic-backed assistant with live tool use.
 
 Architecture
 ------------
-The contract's POST /chat carries a single user `message` per turn plus a
-`conversation_id`. We keep a server-side `ConversationStore` so we can
-rebuild the multi-turn `messages` array Anthropic expects, then call
-`Anthropic.messages.create()` with a system prompt selected by
-`context.current_page`.
+Each user turn enters a tool-use loop:
+
+    1. Send {system, tools, conversation history} to Anthropic.
+    2. If the response stop_reason is "tool_use", run every requested tool
+       (`backend.api.services.chat_tools.execute_tool`), append the
+       assistant's tool_use message and a user tool_result message, and
+       go to step 1.
+    3. Otherwise, return the final text reply.
+
+The conversation store (`ConversationStore`) keeps only the user/assistant
+TEXT history across turns — tool calls live within a single turn.
 
 Security
 --------
@@ -21,31 +27,32 @@ import os
 import uuid
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Optional
+from typing import Any, Optional
 
+import asyncpg
 from dotenv import load_dotenv
 
 # `load_dotenv()` does NOT override variables that are already in
 # `os.environ`. On Windows the spawning shell sometimes exports an EMPTY
-# `ANTHROPIC_API_KEY` (e.g. when a previous shell set it without a value),
-# which would beat the .env file. Drop empty/whitespace existing values
-# first so the .env entry wins.
+# `ANTHROPIC_API_KEY` — drop empty/whitespace existing values first so
+# the .env entry wins.
 for _name in ("ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"):
     _existing = os.environ.get(_name)
     if _existing is not None and not _existing.strip():
         os.environ.pop(_name, None)
 
-load_dotenv()  # idempotent; now .env values fill in missing keys
+load_dotenv()  # idempotent
 
 log = logging.getLogger("fhh.api.chat")
 
 # ----------------------------------------------------------------------
-# API key loading — strip whitespace defensively
+# API key + model
 # ----------------------------------------------------------------------
 _RAW_KEY = os.getenv("ANTHROPIC_API_KEY") or ""
 ANTHROPIC_API_KEY: str = _RAW_KEY.strip()
 ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929").strip()
 ANTHROPIC_MAX_TOKENS: int = int(os.getenv("ANTHROPIC_MAX_TOKENS", "1024"))
+MAX_TOOL_ROUNDS: int = int(os.getenv("CHAT_MAX_TOOL_ROUNDS", "6"))
 
 if not ANTHROPIC_API_KEY:
     log.warning(
@@ -114,7 +121,7 @@ class ConversationStore:
 
     def history_for_anthropic(self, cid: str) -> list[dict]:
         """Return the conversation history as Anthropic-shaped messages
-        (excluding the assistant's previous data_sources/followups metadata)."""
+        (user/assistant text only — tool rounds aren't persisted)."""
         conv = self.get(cid)
         if not conv:
             return []
@@ -129,62 +136,107 @@ store = ConversationStore()
 
 
 # ----------------------------------------------------------------------
-# System prompts — base + per-screen append
+# System prompt
 # ----------------------------------------------------------------------
 
-SYSTEM_PROMPT_BASE = (
-    "You are the FHH AI Optimizer assistant. FHH operates four "
-    "Valmet Advantage DCT 200TS tissue machines: Al-Nakheel (Abu Dhabi), "
-    "Al-Bardi (Egypt), Al-Sindian (Egypt), Al-Snobar (Jordan). The "
-    "maintenance AI uses XGBoost + Isolation Forest, tuned for high "
-    "recall on the critical tier (threshold ≥70). Demand forecasting "
-    "uses Prophet across five MENA markets with Ramadan/Eid seasonality. "
-    "Be concise, factual, and grounded in the screen the user is viewing. "
-    "Never invent numbers — if you don't have data, say so."
-)
+SYSTEM_PROMPT_BASE = """You are FHH AI, the operations assistant for Fine Hygienic Holding (FHH).
+
+Fleet
+-----
+FHH operates four Valmet Advantage DCT 200TS tissue paper machines:
+  • al-nakheel  — Al Nakheel,  Abu Dhabi, UAE
+  • al-bardi    — Al Bardi,    Egypt
+  • al-sindian  — Al Sindian,  Egypt
+  • al-snobar   — Al Snobar,   Jordan
+
+Each machine has six components, in line order:
+  headbox · visconip · yankee · aircap · softreel · rewinder
+
+Demand
+------
+FHH sells 37 SKUs (categories: tissue, baby_care, adult_care, fine_guard,
+wellness, cosmetics) across five MENA markets:
+  uae · ksa · jordan · egypt · morocco
+
+Risk tier scheme (always lowercase)
+  healthy <30,  watch 30-49,  warning 50-69,  critical 70+
+The maintenance model is tuned for high recall on the critical tier.
+
+Available tools
+---------------
+You have direct read access to the live FHH API via these tools:
+  • list_machines                  — fleet snapshot with overall risk per machine
+  • get_machine_risk(machine,comp) — exact integer score for one (machine, component)
+  • get_machine_detail(machine)    — machine + 6 components + state
+  • list_alerts(severity?,machine?,limit?) — active unresolved alerts
+  • get_alert(alert_id)            — full detail for one alert
+  • get_forecast(market,sku,days?) — Prophet forecast with bands
+  • get_demand_drivers(market,sku) — Ramadan / Eid / pre-stockup average lifts
+  • get_fleet_kpis                 — fleet-wide KPIs (OEE, alert counts, etc.)
+
+CRITICAL RULE — grounded answers only
+-------------------------------------
+You MUST call the appropriate tool before answering ANY factual question
+about machines, components, alerts, sensors, forecasts, or KPIs. Never
+invent or estimate numbers. If a tool returns an error or no data, say
+explicitly that you couldn't retrieve the data — never guess. If a
+question can be answered from the static fleet/market description above
+(e.g. "how many machines are there"), you may answer without a tool, but
+prefer a tool whenever the user asks for a current or specific value.
+
+Out of scope (refuse politely, one sentence): pricing in any currency,
+weather, currency conversions, personal/HR matters, anything outside
+FHH operations data accessible through the tools above.
+
+Output style
+------------
+  • Reply concisely — 2-4 sentences typical, longer only when synthesising
+    multiple data points.
+  • Risk scores: integer 0-100 (e.g. "88").
+  • Money: USD with K/M shorthand for big numbers (e.g. "$480K", "$1.2M").
+  • Percentages: one decimal place with sign (e.g. "+8.4%", "-5.2%").
+  • Dates: human-readable (e.g. "Mar 19, 2026").
+  • Use markdown bold for the key number when it answers the question.
+
+Pronouns
+--------
+"this machine", "this SKU", "the current alert" — resolve from the
+"Current screen state" hint at the bottom of this prompt. If no hint is
+provided, ask which one the user means.
+"""
+
 
 SCREEN_APPENDS: dict[str, str] = {
     "overview": (
-        "User is on the fleet Overview screen. They see 4 machine cards, "
-        "the KPI strip, and the critical alert banner. Help them interpret "
+        "User is on the fleet Overview screen. They see four machine cards, "
+        "the KPI strip, and a critical-alert banner. Help them interpret "
         "fleet health and decide where to drill in."
     ),
     "machine_detail": (
-        "User is viewing a specific machine. The screen_payload may "
-        "include machine_id and selected component. Help interpret risk "
-        "scores, sensor traces, and recommended actions."
+        "User is viewing a specific machine. The screen state below "
+        "carries machine_id (and possibly a selected component_id). "
+        "Use those when the user says 'this machine' or 'this component'."
     ),
     "alerts": (
-        "User is on the Alerts triage screen. Help them prioritise, "
-        "decide what to acknowledge vs snooze, and explain why an alert "
-        "fired."
+        "User is on the Alerts triage screen. Help prioritise, decide "
+        "what to acknowledge vs snooze, and explain why an alert fired."
     ),
     "demand_forecast": (
-        "User is on the Demand Forecast screen. Help interpret forecasts, "
-        "Ramadan/Eid effects, and SKU/market comparisons. Forecast "
-        "accuracy is reported as MAPE."
+        "User is on the Demand Forecast screen. Help interpret the "
+        "Prophet forecast, Ramadan / Eid effects, and SKU/market "
+        "comparisons. Forecast accuracy is reported as MAPE (lower is "
+        "better; the fleet average across 185 models is ≈4 %)."
     ),
 }
 
-OUTPUT_FORMAT_INSTRUCTION = (
-    "\n\nRespond in 2-4 sentences, conversational plain English. "
-    "End your reply with a JSON metadata block on its own line in this "
-    "exact shape:\n"
-    '<<META>>{"data_sources_used":["..."],"suggested_followups":["...","...","..."]}<<END>>\n'
-    "data_sources_used should list any contract endpoints whose data you "
-    "leaned on; suggested_followups should be 2-3 short next-question "
-    "options the user might ask. If you have no useful follow-ups, "
-    "use an empty array."
-)
 
-
-def build_system_prompt(screen_context: Optional[str], screen_payload: Optional[dict]) -> str:
+def build_system_prompt(
+    screen_context: Optional[str], screen_payload: Optional[dict]
+) -> str:
     parts = [SYSTEM_PROMPT_BASE]
     if screen_context and screen_context in SCREEN_APPENDS:
-        parts.append(SCREEN_APPENDS[screen_context])
+        parts.append("Screen context: " + SCREEN_APPENDS[screen_context])
     if screen_payload:
-        # Filter to safe scalars only so we never echo back something
-        # unexpected to the model. Keys we know about per the contract:
         keep = {
             k: v for k, v in screen_payload.items()
             if k in (
@@ -194,12 +246,11 @@ def build_system_prompt(screen_context: Optional[str], screen_payload: Optional[
         }
         if keep:
             parts.append(f"Current screen state: {keep}")
-    parts.append(OUTPUT_FORMAT_INSTRUCTION)
     return "\n\n".join(parts)
 
 
 # ----------------------------------------------------------------------
-# Cold-start suggested prompts (before the first message lands)
+# Cold-start suggested prompts
 # ----------------------------------------------------------------------
 
 SUGGESTED_PROMPTS = {
@@ -236,7 +287,7 @@ def suggested_prompts(
 
 
 # ----------------------------------------------------------------------
-# Reply generation — calls Anthropic
+# Tool-use loop
 # ----------------------------------------------------------------------
 
 class ChatUnavailable(Exception):
@@ -248,40 +299,38 @@ class ChatUnavailable(Exception):
         self.safe_message = safe_message
 
 
-def _parse_meta(reply_text: str) -> tuple[str, list[str], list[str]]:
-    """Extract <<META>>{json}<<END>> block from the assistant reply, if present."""
-    import re, json
-    m = re.search(r"<<META>>(.*?)<<END>>", reply_text, re.DOTALL)
-    if not m:
-        return reply_text.strip(), [], []
-    body = reply_text[: m.start()].strip()
-    sources: list[str] = []
-    followups: list[str] = []
-    try:
-        meta = json.loads(m.group(1))
-        sources = list(meta.get("data_sources_used") or [])
-        followups = list(meta.get("suggested_followups") or [])
-    except Exception:  # noqa: BLE001
-        pass
-    return body, sources, followups
+def _block_to_dict(block: Any) -> dict:
+    """Convert an Anthropic response block (Pydantic model) to JSON-safe
+    dict so we can echo it back as part of the next assistant message."""
+    if hasattr(block, "model_dump"):
+        return block.model_dump()
+    if isinstance(block, dict):
+        return dict(block)
+    # Last-ditch fallback
+    return {"type": getattr(block, "type", "text"),
+            "text": getattr(block, "text", str(block))}
 
 
-def generate_reply(
+async def generate_reply(
     history: list[dict],
     screen_context: Optional[str],
     screen_payload: Optional[dict],
+    conn: asyncpg.Connection,
 ) -> dict:
-    """Synchronous Anthropic call. Returns dict with reply + meta lists +
-    usage. Raises ChatUnavailable on any failure (key missing, network,
-    rate limit, etc.) — the router maps that to HTTP 502.
+    """Run the tool-use loop for one user turn. Returns:
+
+        {
+          "reply":               final assistant text,
+          "data_sources_used":   list of tool names called,
+          "suggested_followups": [],   # populated by the router separately if needed
+          "usage":               aggregated input/output tokens,
+        }
     """
     if not ANTHROPIC_API_KEY:
-        raise ChatUnavailable(
-            "ANTHROPIC_API_KEY is not configured on the server."
-        )
+        raise ChatUnavailable("ANTHROPIC_API_KEY is not configured on the server.")
 
     try:
-        from anthropic import Anthropic  # imported lazily so app startup doesn't fail
+        from anthropic import AsyncAnthropic
     except Exception as exc:  # noqa: BLE001
         log.error("anthropic SDK import failed: %s", type(exc).__name__)
         raise ChatUnavailable("AI client unavailable.") from exc
@@ -289,38 +338,94 @@ def generate_reply(
     if not history:
         raise ChatUnavailable("conversation history is empty.")
 
+    # Lazy import to avoid circular: chat_tools imports from services
+    from . import chat_tools
+
     system_prompt = build_system_prompt(screen_context, screen_payload)
+    client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
-    try:
-        client = Anthropic(api_key=ANTHROPIC_API_KEY)
-        resp = client.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=ANTHROPIC_MAX_TOKENS,
-            system=system_prompt,
-            messages=history,
-        )
-    except Exception as exc:  # noqa: BLE001
-        # Defensive: never echo the API key. anthropic.AuthenticationError
-        # gives a generic message but we sanitise further.
-        kind = type(exc).__name__
-        log.error("Anthropic call failed (%s)", kind)
-        raise ChatUnavailable(f"AI request failed: {kind}") from exc
+    messages: list[dict] = list(history)
+    tools_called: list[str] = []
+    total_in = total_out = 0
 
-    # Stitch text blocks back together
-    raw_text = "".join(
-        getattr(b, "text", "")
-        for b in resp.content
-        if getattr(b, "type", "text") == "text"
-    ).strip()
+    for round_idx in range(MAX_TOOL_ROUNDS):
+        try:
+            resp = await client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=ANTHROPIC_MAX_TOKENS,
+                system=system_prompt,
+                tools=chat_tools.TOOL_SCHEMAS,
+                messages=messages,
+            )
+        except Exception as exc:  # noqa: BLE001
+            kind = type(exc).__name__
+            log.error("Anthropic call failed (%s) on round %d", kind, round_idx)
+            raise ChatUnavailable(f"AI request failed: {kind}") from exc
 
-    body, sources, followups = _parse_meta(raw_text)
-    usage = {
-        "input_tokens": int(getattr(resp.usage, "input_tokens", 0) or 0),
-        "output_tokens": int(getattr(resp.usage, "output_tokens", 0) or 0),
-    }
+        total_in += int(getattr(resp.usage, "input_tokens", 0) or 0)
+        total_out += int(getattr(resp.usage, "output_tokens", 0) or 0)
+
+        tool_uses = [b for b in resp.content if getattr(b, "type", "") == "tool_use"]
+
+        # Done?
+        if resp.stop_reason != "tool_use" or not tool_uses:
+            reply_text = "".join(
+                getattr(b, "text", "")
+                for b in resp.content
+                if getattr(b, "type", "text") == "text"
+            ).strip()
+            return {
+                "reply": reply_text,
+                "data_sources_used": tools_called,
+                "suggested_followups": [],
+                "usage": {"input_tokens": total_in, "output_tokens": total_out},
+            }
+
+        # Echo the assistant's tool_use turn back into the message log
+        messages.append({
+            "role": "assistant",
+            "content": [_block_to_dict(b) for b in resp.content],
+        })
+
+        # Execute every tool call in parallel-friendly serial order, then
+        # send all results in a single user message.
+        import json
+        tool_results: list[dict] = []
+        for tu in tool_uses:
+            tu_id = getattr(tu, "id", None) or getattr(tu, "tool_use_id", None) or ""
+            tu_name = getattr(tu, "name", "") or ""
+            tu_input = dict(getattr(tu, "input", {}) or {})
+            try:
+                result = await chat_tools.execute_tool(tu_name, tu_input, conn)
+                tools_called.append(tu_name)
+                content_str = json.dumps(result, default=str)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu_id,
+                    "content": content_str,
+                })
+                log.info("chat tool ok: %s args=%s -> %d chars",
+                         tu_name, list(tu_input.keys()), len(content_str))
+            except Exception as exc:  # noqa: BLE001
+                msg = f"{type(exc).__name__}: {exc}"
+                log.warning("chat tool %s failed: %s", tu_name, msg)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu_id,
+                    "content": json.dumps({"error": msg}),
+                    "is_error": True,
+                })
+
+        messages.append({"role": "user", "content": tool_results})
+
+    # Hit max rounds — return whatever we have. Defensive.
+    log.warning("chat hit MAX_TOOL_ROUNDS=%d; tools=%s", MAX_TOOL_ROUNDS, tools_called)
     return {
-        "reply": body,
-        "data_sources_used": sources,
-        "suggested_followups": followups,
-        "usage": usage,
+        "reply": (
+            "I needed more tool calls than my budget allows. Here's what I "
+            "gathered so far — try a more specific question."
+        ),
+        "data_sources_used": tools_called,
+        "suggested_followups": [],
+        "usage": {"input_tokens": total_in, "output_tokens": total_out},
     }
