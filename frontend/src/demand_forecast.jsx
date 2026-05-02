@@ -141,9 +141,55 @@ function fmtUnits(n) {
   return Math.round(n).toLocaleString();
 }
 function fmtSignedPct(n) {
-  if (n == null) return "—";
+  // null/undefined/NaN/±Infinity all render as the em-dash placeholder so a
+  // missing or unstable upstream value never reaches the user as "NaN%".
+  if (n == null || typeof n !== "number" || !Number.isFinite(n)) return "—";
   const sign = n > 0 ? "+" : n < 0 ? "" : "";
   return sign + n.toFixed(1) + "%";
+}
+
+// Derive an annualised "underlying market growth" % from the forecast itself.
+//
+// Per spec: percent change between the mean of the first 30 days of the
+// forecast and the mean of the last 30 days, annualised when the horizon is
+// shorter than 365 days. Works with daily forecasts (sample-based windows)
+// and monthly aggregates (uses first/last point directly).
+//
+// Returns a finite number, or null on any bad input (caller renders "—").
+function deriveForecastTrendPct(forecast) {
+  if (!Array.isArray(forecast) || forecast.length < 2) return null;
+  const valOf = (p) => Number(p?.forecast_value);
+  const meanOf = (arr) => {
+    const vals = arr.map(valOf).filter((v) => Number.isFinite(v) && v > 0);
+    if (vals.length === 0) return null;
+    return vals.reduce((s, v) => s + v, 0) / vals.length;
+  };
+
+  // Pick the first/last 30-day window when the forecast looks daily,
+  // otherwise fall back to first/last point (monthly/quarterly aggregates).
+  let firstSlice, lastSlice;
+  if (forecast.length >= 30) {
+    firstSlice = forecast.slice(0, 30);
+    lastSlice = forecast.slice(-30);
+  } else {
+    firstSlice = [forecast[0]];
+    lastSlice = [forecast[forecast.length - 1]];
+  }
+  const a = meanOf(firstSlice);
+  const b = meanOf(lastSlice);
+  if (a == null || b == null || a <= 0) return null;
+
+  const firstDate = new Date(firstSlice[0].date);
+  const lastDate = new Date(lastSlice[lastSlice.length - 1].date);
+  const dayGap = (lastDate - firstDate) / 86400000;
+  if (!Number.isFinite(dayGap) || dayGap <= 0) return null;
+
+  const rawPct = ((b - a) / a) * 100;
+  // Annualise if horizon < 365d. Cap the multiplier so a 7-day forecast
+  // doesn't yield silly four-digit annualised growth.
+  const factor = dayGap < 365 ? Math.min(12, 365 / dayGap) : 1;
+  const annualised = rawPct * factor;
+  return Number.isFinite(annualised) ? Math.round(annualised * 10) / 10 : null;
 }
 function fmtDateShort(iso) {
   const d = new Date(iso);
@@ -157,6 +203,28 @@ function isoAddDays(iso, days) {
 }
 
 // ───────────── searchable dropdown ─────────────
+// Shared option renderer for the Market dropdown. Uses inline-flex with a
+// fixed-width flag column so the country name aligns regardless of how the
+// flag emoji renders on the host platform (Windows fallback shows regional
+// indicator pairs like "JO" / "AE", and embedding spaces in the label
+// string previously caused short names like "Jordan" to collide with the
+// flag glyph). Returns "Select…" when value is null.
+function renderMarketOption(o) {
+  if (!o) return "Select…";
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+      <span style={{
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        width: 22, minWidth: 22, fontSize: 16, lineHeight: 1,
+        flexShrink: 0,
+      }}>{o.flag}</span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {o.label}
+      </span>
+    </span>
+  );
+}
+
 function Dropdown({ label, value, options, onChange, width = 240, searchable = false, renderOption, renderValue }) {
   const [open, setOpen] = useStateD(false);
   const [q, setQ] = useStateD("");
@@ -313,8 +381,16 @@ function HeroChart({ history, forecast, scenarioForecast, events, horizonDays })
   const fcst = useMemoD(() => forecast.slice(0, horizonDays), [forecast, horizonDays]);
   const scen = useMemoD(() => scenarioForecast ? scenarioForecast.slice(0, horizonDays) : null, [scenarioForecast, horizonDays]);
 
+  // Historical points come from enrichForecast which uses `forecast_value` /
+  // `units_sold` (no `actual` field). Read both with a fallback so this
+  // works against either shape.
+  const histVal = (p) =>
+    p?.actual != null ? Number(p.actual)
+    : p?.forecast_value != null ? Number(p.forecast_value)
+    : p?.units_sold != null ? Number(p.units_sold)
+    : 0;
   const all = useMemoD(() => {
-    const a = hist.map((p) => ({ date: p.date, kind: "h", value: p.actual }));
+    const a = hist.map((p) => ({ date: p.date, kind: "h", value: histVal(p) }));
     fcst.forEach((p) => a.push({ date: p.date, kind: "f", value: p.forecast_value, lo: p.lower_bound, hi: p.upper_bound }));
     return a;
   }, [hist, fcst]);
@@ -347,7 +423,7 @@ function HeroChart({ history, forecast, scenarioForecast, events, horizonDays })
   const histPath = useMemoD(() => {
     let d = "";
     hist.forEach((p, i) => {
-      const x = xAt(i); const y = yAt(p.actual);
+      const x = xAt(i); const y = yAt(histVal(p));
       d += (i === 0 ? "M " : " L ") + x.toFixed(1) + " " + y.toFixed(1);
     });
     return d;
@@ -361,7 +437,7 @@ function HeroChart({ history, forecast, scenarioForecast, events, horizonDays })
     const lastH = hist[hist.length - 1];
     if (lastH) {
       const i0 = hist.length - 1;
-      d += "M " + xAt(i0).toFixed(1) + " " + yAt(lastH.actual).toFixed(1);
+      d += "M " + xAt(i0).toFixed(1) + " " + yAt(histVal(lastH)).toFixed(1);
     }
     fcst.forEach((p, i) => {
       const x = xAt(hist.length + i);
@@ -396,7 +472,7 @@ function HeroChart({ history, forecast, scenarioForecast, events, horizonDays })
     let d = "";
     const lastH = hist[hist.length - 1];
     if (lastH) {
-      d += "M " + xAt(hist.length - 1).toFixed(1) + " " + yAt(lastH.actual).toFixed(1);
+      d += "M " + xAt(hist.length - 1).toFixed(1) + " " + yAt(histVal(lastH)).toFixed(1);
     }
     scen.forEach((p, i) => {
       d += " L " + xAt(hist.length + i).toFixed(1) + " " + yAt(p.forecast_value).toFixed(1);
@@ -412,15 +488,37 @@ function HeroChart({ history, forecast, scenarioForecast, events, horizonDays })
     return ticks;
   }, [yMax]);
 
-  // x-axis month labels — first of each month visible in `all`
+  // x-axis month labels — first occurrence of each month in `all`. We then
+  // enforce a minimum SVG-unit gap between adjacent emitted labels so they
+  // don't visually pile up near the right edge of the chart, and skip the
+  // final tick if it falls within the padding gutter.
   const xMonthTicks = useMemoD(() => {
-    const ticks = [];
+    const raw = [];
     let prevMonth = null;
     all.forEach((p, i) => {
       const m = p.date.slice(0, 7);
-      if (m !== prevMonth) { ticks.push({ idx: i, date: p.date }); prevMonth = m; }
+      if (m !== prevMonth) { raw.push({ idx: i, date: p.date }); prevMonth = m; }
     });
-    return ticks;
+    // "Apr" / "Jul" labels are ~22 SVG units wide at fontSize 10.5 on the
+    // 1000-unit-wide viewBox. 44 units gives ~22px of breathing room on
+    // either side, enough to avoid collisions even when the SVG scales
+    // down to ~600px wide on smaller viewports.
+    const MIN_GAP = 44;
+    const filtered = [];
+    let lastX = -Infinity;
+    raw.forEach((t) => {
+      const x = xAt(t.idx);
+      if (x - lastX >= MIN_GAP) {
+        filtered.push(t);
+        lastX = x;
+      }
+    });
+    // Drop the final tick if it would render inside the right padding.
+    if (filtered.length > 0) {
+      const lastTickX = xAt(filtered[filtered.length - 1].idx);
+      if (lastTickX > W - padR - 20) filtered.pop();
+    }
+    return filtered;
   }, [all]);
 
   // Ramadan/Eid bands
@@ -668,19 +766,30 @@ function DecompositionCard({ tag, accent, title, value, sub, children, expanded,
 function DecompositionRow({ history, forecast, seasonality }) {
   const [openId, setOpenId] = useStateD(null);
 
-  // trend: smoothed line through history (mean of every 14d window)
+  // trend: smoothed line through history (mean of every 14d window). The
+  // enriched history points use `forecast_value`/`units_sold` rather than
+  // `actual`, so read defensively.
   const trendValues = useMemoD(() => {
     const out = [];
     const w = 14;
+    const valOf = (p) =>
+      p?.actual != null ? Number(p.actual)
+      : p?.forecast_value != null ? Number(p.forecast_value)
+      : p?.units_sold != null ? Number(p.units_sold)
+      : 0;
     for (let i = 0; i < history.length; i += w) {
       const slice = history.slice(i, i + w);
-      const m = slice.reduce((s, p) => s + p.actual, 0) / slice.length;
-      out.push(m);
+      const sum = slice.reduce((s, p) => s + valOf(p), 0);
+      const mean = slice.length ? sum / slice.length : 0;
+      if (Number.isFinite(mean)) out.push(mean);
     }
     return out;
   }, [history]);
 
-  const yoyPct = +(((trendValues[trendValues.length - 1] - trendValues[0]) / trendValues[0]) * 100).toFixed(1);
+  // Underlying-market-growth %. Spec: percent change between mean of first
+  // 30 days of the forecast and mean of last 30 days, annualised when the
+  // horizon < 365d. NaN/Infinity collapses to null → fmtSignedPct shows "—".
+  const yoyPct = useMemoD(() => deriveForecastTrendPct(forecast), [forecast]);
 
   // seasonality: seasonality.yearly_pattern indices
   const seasonValues = (seasonality?.yearly_pattern || []).map((p) => p.index);
@@ -1252,7 +1361,11 @@ function CompareOverlay({ open, onClose, baseSku, baseMarket, products }) {
           <div>
             <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
               <Dropdown label="Market" value={otherMarket}
-                options={Object.keys(MARKET_LABEL).map((id) => ({ id, label: `${MARKET_FLAG[id]} ${MARKET_LABEL[id]}` }))}
+                options={Object.keys(MARKET_LABEL).map((id) => ({
+                  id, label: MARKET_LABEL[id], flag: MARKET_FLAG[id],
+                }))}
+                renderOption={renderMarketOption}
+                renderValue={renderMarketOption}
                 onChange={setOtherMarket} width={180} />
               <Dropdown label="Product" value={otherSku} options={products}
                 onChange={setOtherSku} width={260} searchable />
@@ -1490,8 +1603,14 @@ function DemandForecastScreen() {
           display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end",
         }}>
           <Dropdown label="Market" value={market}
-            options={Object.keys(MARKET_LABEL).map((id) => ({ id, label: `${MARKET_FLAG[id]}  ${MARKET_LABEL[id]}` }))}
-            onChange={setMarket} width={210} />
+            options={Object.keys(MARKET_LABEL).map((id) => ({
+              id,
+              label: MARKET_LABEL[id],
+              flag: MARKET_FLAG[id],
+            }))}
+            onChange={setMarket} width={210}
+            renderOption={renderMarketOption}
+            renderValue={renderMarketOption} />
           <Dropdown label="Product (SKU)" value={sku} options={productOpts}
             onChange={setSku} width={290} searchable
             renderOption={(o) => (
