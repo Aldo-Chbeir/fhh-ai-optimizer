@@ -150,12 +150,18 @@ function fmtSignedPct(n) {
 
 // Derive an annualised "underlying market growth" % from the forecast itself.
 //
-// Per spec: percent change between the mean of the first 30 days of the
-// forecast and the mean of the last 30 days, annualised when the horizon is
-// shorter than 365 days. Works with daily forecasts (sample-based windows)
-// and monthly aggregates (uses first/last point directly).
+// Per spec:
+//   - first-30-days mean vs last-30-days mean of the forecast, annualised
+//     when the horizon is shorter than 365 days
+//   - returns null (→ "—") when the forecast window is < 30 days OR has
+//     fewer than 14 daily data points (insufficient signal)
+//   - clamps to ±25 %; values outside this band are implausible YoY market
+//     growth and we'd rather show "—" than mislead
 //
-// Returns a finite number, or null on any bad input (caller renders "—").
+// Works with both daily forecasts and monthly aggregates: the 14-point rule
+// only fires when the resolution is daily (avg gap between consecutive
+// points ≤ 7 days), so monthly responses (4-12 points) still produce a
+// trend when the math is sane.
 function deriveForecastTrendPct(forecast) {
   if (!Array.isArray(forecast) || forecast.length < 2) return null;
   const valOf = (p) => Number(p?.forecast_value);
@@ -165,8 +171,19 @@ function deriveForecastTrendPct(forecast) {
     return vals.reduce((s, v) => s + v, 0) / vals.length;
   };
 
-  // Pick the first/last 30-day window when the forecast looks daily,
-  // otherwise fall back to first/last point (monthly/quarterly aggregates).
+  const firstDate = new Date(forecast[0].date);
+  const lastDate = new Date(forecast[forecast.length - 1].date);
+  const dayGap = (lastDate - firstDate) / 86400000;
+  if (!Number.isFinite(dayGap) || dayGap < 30) return null;
+
+  // Daily resolution? If avg gap is ≤ 7 days we treat as daily and require
+  // at least 14 points. Monthly aggregates (avg gap ≈ 30) skip this check.
+  const avgGap = dayGap / Math.max(1, forecast.length - 1);
+  const looksDaily = avgGap <= 7;
+  if (looksDaily && forecast.length < 14) return null;
+
+  // First-30-days mean vs last-30-days mean for daily; first / last point
+  // for monthly aggregates.
   let firstSlice, lastSlice;
   if (forecast.length >= 30) {
     firstSlice = forecast.slice(0, 30);
@@ -179,17 +196,49 @@ function deriveForecastTrendPct(forecast) {
   const b = meanOf(lastSlice);
   if (a == null || b == null || a <= 0) return null;
 
-  const firstDate = new Date(firstSlice[0].date);
-  const lastDate = new Date(lastSlice[lastSlice.length - 1].date);
-  const dayGap = (lastDate - firstDate) / 86400000;
-  if (!Number.isFinite(dayGap) || dayGap <= 0) return null;
-
   const rawPct = ((b - a) / a) * 100;
-  // Annualise if horizon < 365d. Cap the multiplier so a 7-day forecast
-  // doesn't yield silly four-digit annualised growth.
   const factor = dayGap < 365 ? Math.min(12, 365 / dayGap) : 1;
   const annualised = rawPct * factor;
-  return Number.isFinite(annualised) ? Math.round(annualised * 10) / 10 : null;
+  if (!Number.isFinite(annualised)) return null;
+
+  // Sane bounds. Anything beyond ±25 % YoY is implausible for the FHH
+  // tissue / baby-care category and almost certainly an artefact of a
+  // low-volume, noisy SKU. Surface "—" rather than a misleading number.
+  if (Math.abs(annualised) > 25) return null;
+
+  return Math.round(annualised * 10) / 10;
+}
+
+// Pick a "nice" y-axis maximum + tick step so the forecast line never
+// touches the top edge and labels round cleanly.
+//
+// Algorithm: target = dataMax × 1.15. Walk nice step values
+// {1, 2, 2.5, 5} × 10^k from small to large. Return the first step where
+// ceil(target / step) yields 3-5 intervals (4-6 ticks).
+//
+// Examples (matches the spec's expectations):
+//   dataMax 50_000   → target 57_500  → yMax  60_000 (step 20_000)
+//   dataMax 119_000  → target 136_850 → yMax 150_000 (step 50_000)
+//   dataMax 13_000   → target 14_950  → yMax  15_000 (step  5_000)
+//   dataMax 20_000   → target 23_000  → yMax  25_000 (step  5_000)
+function niceAxisMax(dataMax) {
+  if (!Number.isFinite(dataMax) || dataMax <= 0) {
+    return { yMax: 1000, step: 250 };
+  }
+  const target = dataMax * 1.15;
+  for (let exp = -2; exp <= 9; exp++) {
+    const base = Math.pow(10, exp);
+    for (const factor of [1, 2, 2.5, 5]) {
+      const step = factor * base;
+      const n = Math.ceil(target / step);
+      if (n >= 3 && n <= 5) {
+        return { yMax: n * step, step };
+      }
+    }
+  }
+  // Defensive fallback (unreachable for sensible inputs).
+  const step = Math.pow(10, Math.ceil(Math.log10(target / 4)));
+  return { yMax: Math.ceil(target / step) * step, step };
 }
 function fmtDateShort(iso) {
   const d = new Date(iso);
@@ -396,11 +445,13 @@ function HeroChart({ history, forecast, scenarioForecast, events, horizonDays })
   }, [hist, fcst]);
 
   // y range
-  const yMax = useMemoD(() => {
+  // y-axis: 15 % headroom above peak, rounded up to a "nice" tick value so
+  // the forecast line never touches the top edge and labels read cleanly.
+  const { yMax, axisStep } = useMemoD(() => {
     let m = 0;
     all.forEach((p) => { if ((p.hi || p.value) > m) m = p.hi || p.value; });
     if (scen) scen.forEach((p) => { if (p.upper_bound > m) m = p.upper_bound; });
-    return Math.ceil(m / 1000) * 1000;
+    return niceAxisMax(m);
   }, [all, scen]);
   const yMin = 0;
 
@@ -480,13 +531,17 @@ function HeroChart({ history, forecast, scenarioForecast, events, horizonDays })
     return d;
   }, [hist, scen, yMax]);
 
-  // y-axis ticks
+  // y-axis ticks — use the nice step from niceAxisMax so labels round to
+  // clean values (multiples of 5K, 20K, 50K, …) instead of yMax/4 which
+  // could land on awkward fractions like 37.5K.
   const yTicks = useMemoD(() => {
+    if (!Number.isFinite(axisStep) || axisStep <= 0) return [0, yMax];
     const ticks = [];
-    const step = yMax / 4;
-    for (let i = 0; i <= 4; i++) ticks.push(Math.round(i * step));
+    for (let v = 0; v <= yMax + axisStep * 0.5; v += axisStep) {
+      ticks.push(Math.round(v));
+    }
     return ticks;
-  }, [yMax]);
+  }, [yMax, axisStep]);
 
   // x-axis month labels — first occurrence of each month in `all`. We then
   // enforce a minimum SVG-unit gap between adjacent emitted labels so they
