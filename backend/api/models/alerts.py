@@ -1,10 +1,19 @@
 from __future__ import annotations
 
-from typing import Optional
+from enum import Enum
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
 from .enums import AlarmSeverity, MaintenanceType
+
+
+class AlertStatus(str, Enum):
+    ACTIVE       = "active"
+    ACKNOWLEDGED = "acknowledged"
+    SCHEDULED    = "scheduled"
+    SNOOZED      = "snoozed"
+    RESOLVED     = "resolved"
 
 
 class Alert(BaseModel):
@@ -20,6 +29,44 @@ class Alert(BaseModel):
     estimated_cost_if_unaddressed_usd: int
     created_at: str  # ISO 8601 UTC
     acknowledged: bool
+    status: AlertStatus = AlertStatus.ACTIVE
+    status_changed_at: Optional[str] = None
+    status_changed_by: Optional[str] = None
+    status_metadata: dict = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# PATCH /alerts/{id}/{action} request + response shapes
+# ---------------------------------------------------------------------------
+
+class AcknowledgeBody(BaseModel):
+    acknowledged_by: str = Field(min_length=1, max_length=120)
+    notes: Optional[str] = Field(default=None, max_length=2000)
+
+
+class ScheduleBody(BaseModel):
+    scheduled_date: str = Field(min_length=4, max_length=40)  # ISO date or datetime
+    technician: str = Field(min_length=1, max_length=120)
+    priority: Literal["low", "normal", "high", "emergency"] = "normal"
+    notes: Optional[str] = Field(default=None, max_length=2000)
+
+
+class SnoozeBody(BaseModel):
+    snooze_until: str = Field(min_length=4, max_length=40)
+    reason: Optional[str] = Field(default=None, max_length=2000)
+
+
+class ResolveBody(BaseModel):
+    resolved_by: str = Field(min_length=1, max_length=120)
+    resolution_notes: Optional[str] = Field(default=None, max_length=2000)
+
+
+class AlertStatusUpdate(BaseModel):
+    """Compact response after a PATCH /alerts/{id}/* call."""
+    id: str
+    status: AlertStatus
+    status_changed_at: Optional[str] = None
+    status_metadata: dict = Field(default_factory=dict)
 
 
 class AlertCounts(BaseModel):
@@ -80,3 +127,5 @@ class AlertsKPIs(BaseModel):
     acknowledged_today: int
     acknowledged_today_total: int
     last_updated: str
+    # New per-status counts that mirror the alert tabs in the UI.
+    counts_by_status: dict = Field(default_factory=dict)

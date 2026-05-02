@@ -10,26 +10,11 @@
 const { useState: useStateAlerts, useEffect: useEffectAlerts, useMemo: useMemoAlerts, useRef: useRefAlerts } = React;
 
 // ───────────── localStorage helpers ─────────────
-function readOverrides() {
-  try { return JSON.parse(localStorage.getItem("fhh_alert_overrides") || "{}"); }
-  catch (e) { return {}; }
-}
-function writeOverrides(map) {
-  localStorage.setItem("fhh_alert_overrides", JSON.stringify(map));
-}
-function applyOverride(alertId, patch) {
-  const map = readOverrides();
-  map[alertId] = { ...(map[alertId] || {}), ...patch };
-  writeOverrides(map);
-  return map[alertId];
-}
-function mergeOverrides(alerts, overrides) {
-  return alerts.map((a) => {
-    const o = overrides[a.alert_id];
-    if (!o) return a;
-    return { ...a, ...o, acknowledged: o._status ? (o._status !== "active") : a.acknowledged };
-  });
-}
+// One-time migration: clear the legacy `fhh_alert_overrides` blob (alert
+// state now persists in the database via PATCH /alerts/{id}/{action}).
+// Keep this no-op around for a release or two so users with stale local
+// data don't see ghost statuses.
+try { localStorage.removeItem("fhh_alert_overrides"); } catch (_) {}
 
 // ───────────── meta tables ─────────────
 const SEV_META = {
@@ -799,7 +784,6 @@ function EmptyState({ onClear }) {
 function AlertsScreen({ onOpenMachine }) {
   const [kpis, setKpis] = useStateAlerts(null);
   const [allAlerts, setAllAlerts] = useStateAlerts(null);
-  const [overrides, setOverrides] = useStateAlerts(readOverrides());
   const [tab, setTab] = useStateAlerts("active");
   const [search, setSearch] = useStateAlerts("");
   const [machineFilter, setMachineFilter] = useStateAlerts([]);
@@ -812,61 +796,130 @@ function AlertsScreen({ onOpenMachine }) {
   const [noteFor, setNoteFor] = useStateAlerts(null);
   const [toast, setToast] = useStateAlerts(null);
 
-  useEffectAlerts(() => {
+  // The "include_resolved=true" flag pulls every triage state from the
+  // server (active / acknowledged / scheduled / snoozed / resolved) so
+  // every tab in the screen header has data without a separate fetch.
+  function refetchAlerts() {
     window.api.get("/alerts/kpis").then(setKpis);
-    // pull all alerts (sort applied client-side so user can resort without refetch)
-    window.api.get("/alerts", { sort: "created_at" }).then((r) => setAllAlerts(r.alerts));
-  }, []);
+    window.api
+      .get("/alerts", { sort: "created_at", include_resolved: "true" })
+      .then((r) => setAllAlerts(r.alerts));
+  }
+  useEffectAlerts(() => { refetchAlerts(); }, []);
 
   function showToast(msg) {
     setToast(msg);
     setTimeout(() => setToast(null), 2400);
   }
 
-  function patchAlert(alertId, patch) {
-    const next = applyOverride(alertId, patch);
-    setOverrides({ ...readOverrides() });
-    return next;
+  // ─────────────────────────────────────────────────────────────────
+  // Persisted alert actions — backed by PATCH /alerts/{id}/{action}.
+  // We optimistically patch the local list so the alert moves into the
+  // new tab instantly; on backend failure we roll back and surface a
+  // toast. After every successful action we refetch /alerts/kpis so the
+  // header counters stay in sync with the DB.
+  // ─────────────────────────────────────────────────────────────────
+
+  async function applyServerStatus(alert, { action, body, optimistic, successMsg, errorMsg }) {
+    const id = alert.alert_id;
+    const previous = allAlerts;
+    setAllAlerts((prev) =>
+      (prev || []).map((a) => (a.alert_id === id ? { ...a, ...optimistic } : a))
+    );
+    try {
+      await window.api.patch(`/alerts/${id}/${action}`, body);
+      window.api.get("/alerts/kpis").then(setKpis);
+      showToast(successMsg);
+    } catch (e) {
+      setAllAlerts(previous); // rollback
+      const msg = errorMsg || e?.body?.error?.message || e?.message || "Action failed.";
+      showToast("⚠ " + msg);
+    }
   }
 
   function ack(alert) {
-    patchAlert(alert.alert_id, {
-      _status: "acknowledged",
-      _ack_by: "Operations Manager",
-      _ack_at: new Date().toISOString(),
+    const now = new Date().toISOString();
+    return applyServerStatus(alert, {
+      action: "acknowledge",
+      body: { acknowledged_by: "Operations Manager" },
+      optimistic: {
+        _status: "acknowledged", status: "acknowledged",
+        acknowledged: true,
+        status_changed_by: "Operations Manager",
+        status_changed_at: now,
+        // Legacy fields the existing JSX still reads:
+        _ack_by: "Operations Manager", _ack_at: now,
+      },
+      successMsg: "Alert acknowledged",
     });
-    showToast("Alert acknowledged");
   }
+
   function snooze(alert) {
-    patchAlert(alert.alert_id, {
-      _status: "snoozed",
-      _ack_by: "Operations Manager",
-      _ack_at: new Date().toISOString(),
-      _snoozed_until: new Date(Date.now() + 24*60*60*1000).toISOString(),
+    const now = new Date().toISOString();
+    const until = new Date(Date.now() + 24*60*60*1000).toISOString();
+    return applyServerStatus(alert, {
+      action: "snooze",
+      body: { snooze_until: until, reason: "Snoozed 24h" },
+      optimistic: {
+        _status: "snoozed", status: "snoozed",
+        acknowledged: true,
+        status_changed_by: "Operations Manager",
+        status_changed_at: now,
+        status_metadata: { snooze_until: until },
+        _ack_by: "Operations Manager", _ack_at: now,
+        _snoozed_until: until,
+      },
+      successMsg: "Snoozed for 24 hours",
     });
-    showToast("Snoozed for 24 hours");
   }
+
   function schedule(alert, { date, tech, priority, notes }) {
-    patchAlert(alert.alert_id, {
-      _status: "scheduled",
-      _ack_by: "Operations Manager",
-      _ack_at: new Date().toISOString(),
-      _scheduled_for: date,
-      _scheduled_by: tech,
-      _scheduled_priority: priority,
-      _scheduled_notes: notes,
-    });
+    const now = new Date().toISOString();
     setScheduleFor(null);
-    showToast(`Maintenance scheduled for ${date}`);
-  }
-  function resolve(alert) {
-    patchAlert(alert.alert_id, {
-      _status: "resolved",
-      _resolved_at: new Date().toISOString(),
-      _resolved_by: "Operations Manager",
-      _resolution_notes: "Marked resolved by operator.",
+    return applyServerStatus(alert, {
+      action: "schedule",
+      body: {
+        scheduled_date: date,
+        technician: tech,
+        priority: priority || "normal",
+        notes: notes || undefined,
+      },
+      optimistic: {
+        _status: "scheduled", status: "scheduled",
+        acknowledged: true,
+        status_changed_by: tech,
+        status_changed_at: now,
+        status_metadata: {
+          scheduled_date: date, technician: tech,
+          priority: priority || "normal", notes,
+        },
+        _ack_by: "Operations Manager", _ack_at: now,
+        _scheduled_for: date, _scheduled_by: tech,
+        _scheduled_priority: priority, _scheduled_notes: notes,
+      },
+      successMsg: `Maintenance scheduled for ${date}`,
     });
-    showToast("Alert marked resolved");
+  }
+
+  function resolve(alert) {
+    const now = new Date().toISOString();
+    return applyServerStatus(alert, {
+      action: "resolve",
+      body: {
+        resolved_by: "Operations Manager",
+        resolution_notes: "Marked resolved by operator.",
+      },
+      optimistic: {
+        _status: "resolved", status: "resolved",
+        acknowledged: true,
+        status_changed_by: "Operations Manager",
+        status_changed_at: now,
+        status_metadata: { resolution_notes: "Marked resolved by operator." },
+        _resolved_at: now, _resolved_by: "Operations Manager",
+        _resolution_notes: "Marked resolved by operator.",
+      },
+      successMsg: "Alert marked resolved",
+    });
   }
   function addNote(alert, text) {
     if (text.trim()) {
@@ -894,17 +947,18 @@ function AlertsScreen({ onOpenMachine }) {
     showToast(`${selected.size} alerts snoozed`);
   }
 
-  // merged list with overrides
-  const merged = useMemoAlerts(() => {
-    if (!allAlerts) return [];
-    return mergeOverrides(allAlerts, overrides);
-  }, [allAlerts, overrides]);
+  // The server now ships the persisted triage status on every alert
+  // (`_status` / `status`); no client-side override layer needed.
+  const merged = allAlerts || [];
 
-  // tab counts (always reflect current overrides)
+  // Tab counts pivot off the same persisted statuses. Per-status totals
+  // also come back on /alerts/kpis (kpis.counts_by_status), but computing
+  // them locally keeps the badge in sync with the optimistic state during
+  // the moment between PATCH and KPI refetch.
   const counts = useMemoAlerts(() => {
     const c = { active: 0, acknowledged: 0, snoozed: 0, scheduled: 0, resolved: 0, all: merged.length };
     merged.forEach((a) => {
-      const s = a._status || "active";
+      const s = a._status || a.status || "active";
       if (c[s] != null) c[s]++;
     });
     return c;

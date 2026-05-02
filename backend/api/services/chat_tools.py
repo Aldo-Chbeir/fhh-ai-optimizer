@@ -100,10 +100,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "list_alerts",
         "description": (
-            "List active (unresolved) alarms with optional filters. "
-            "Returns up to `limit` rows plus the total active counts by "
-            "severity. Use for 'how many critical alerts', 'what's "
-            "broken on Al-Bardi', triage questions, etc."
+            "List alerts with optional filters. Defaults to non-resolved "
+            "rows (active / acknowledged / scheduled / snoozed); pass "
+            "status='resolved' to see closed alerts. Each row carries the "
+            "triage status so you can answer 'how many alerts has the "
+            "operator acknowledged today', 'what's still active', etc. "
+            "Returns up to `limit` rows plus per-status totals across "
+            "the whole table."
         ),
         "input_schema": {
             "type": "object",
@@ -112,6 +115,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "type": "string",
                     "enum": ["info", "warning", "critical"],
                     "description": "Filter by severity (optional).",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "acknowledged", "scheduled",
+                             "snoozed", "resolved"],
+                    "description": "Filter by triage status (optional).",
                 },
                 "machine_id": {
                     "type": "string",
@@ -316,22 +325,33 @@ async def tool_list_alerts(conn: asyncpg.Connection, args: dict) -> dict:
     ML inference. The richer risk_score/title shape lives in `get_alert`."""
     severity = args.get("severity")
     machine_id = args.get("machine_id")
+    status = args.get("status")
     limit = max(1, min(int(args.get("limit", 5)), 25))
 
+    valid_statuses = {"active", "acknowledged", "scheduled", "snoozed", "resolved"}
+    if status and status not in valid_statuses:
+        raise ValueError(f"invalid status '{status}'")
+
     sql = (
-        "SELECT alarm_id, machine_id, timestamp, severity, description "
-        "FROM alarm_events WHERE resolved_at IS NULL"
+        "SELECT alarm_id, machine_id, timestamp, severity, description, "
+        "status, status_changed_at, status_changed_by "
+        "FROM alarm_events WHERE 1=1"
     )
     params: list = []
+    if status:
+        params.append(status)
+        sql += f" AND status = ${len(params)}"
+    else:
+        # Default: hide resolved rows so chat answers focus on actionable items.
+        sql += " AND status <> 'resolved'"
     if severity:
         params.append(severity)
         sql += f" AND severity = ${len(params)}"
     if machine_id:
         params.append(machine_id)
         sql += f" AND machine_id = ${len(params)}"
-    sql += " ORDER BY "
-    # Critical first, then most-recent.
     sql += (
+        " ORDER BY "
         "CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, "
         "timestamp DESC"
     )
@@ -345,31 +365,54 @@ async def tool_list_alerts(conn: asyncpg.Connection, args: dict) -> dict:
             "alert_id": "alt-" + r["alarm_id"][4:] if r["alarm_id"].startswith("alm-") else r["alarm_id"],
             "machine_id": r["machine_id"],
             "severity": r["severity"],
+            "status": r["status"] or "active",
+            "status_changed_by": r["status_changed_by"],
+            "status_changed_at": (
+                r["status_changed_at"].astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                if r["status_changed_at"] else None
+            ),
             "description": r["description"],
             "timestamp": r["timestamp"].astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         for r in rows
     ]
 
-    crit = await conn.fetchval(
-        "SELECT COUNT(*) FROM alarm_events "
-        "WHERE severity = 'critical' AND resolved_at IS NULL"
-    ) or 0
-    warn = await conn.fetchval(
-        "SELECT COUNT(*) FROM alarm_events "
-        "WHERE severity = 'warning' AND resolved_at IS NULL"
-    ) or 0
-    info = await conn.fetchval(
-        "SELECT COUNT(*) FROM alarm_events "
-        "WHERE severity = 'info' AND resolved_at IS NULL"
+    # Per-(severity, status) totals so the chat can answer "how many active
+    # criticals" or "how many alerts have I acknowledged today" without a
+    # follow-up query.
+    matrix_rows = await conn.fetch(
+        "SELECT severity, status, COUNT(*) AS n FROM alarm_events "
+        "GROUP BY severity, status"
+    )
+    counts_by_severity: dict[str, dict[str, int]] = {}
+    for r in matrix_rows:
+        counts_by_severity.setdefault(r["severity"], {})[r["status"]] = int(r["n"])
+
+    counts_by_status_total: dict[str, int] = {}
+    for r in matrix_rows:
+        counts_by_status_total[r["status"]] = (
+            counts_by_status_total.get(r["status"], 0) + int(r["n"])
+        )
+    for s in ("active", "acknowledged", "scheduled", "snoozed", "resolved"):
+        counts_by_status_total.setdefault(s, 0)
+
+    # Acknowledged-today (any severity, status changed to ack/sch/snz today)
+    ack_today = await conn.fetchval(
+        """
+        SELECT COUNT(*) FROM alarm_events
+        WHERE status IN ('acknowledged','scheduled','snoozed')
+          AND status_changed_at::date = (
+            SELECT MAX(timestamp)::date FROM alarm_events
+          )
+        """
     ) or 0
 
     return {
         "alerts": alerts,
         "filtered_results_returned": len(alerts),
-        "total_active_critical": int(crit),
-        "total_active_warning": int(warn),
-        "total_active_info": int(info),
+        "counts_by_status": counts_by_status_total,
+        "counts_by_severity_status": counts_by_severity,
+        "acknowledged_today": int(ack_today),
     }
 
 

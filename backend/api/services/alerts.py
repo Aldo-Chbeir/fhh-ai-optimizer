@@ -78,20 +78,39 @@ def _iso(ts: datetime) -> str:
     return ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+VALID_STATUSES = ("active", "acknowledged", "scheduled", "snoozed", "resolved")
+NON_TERMINAL_STATUSES = ("active", "acknowledged", "scheduled", "snoozed")
+
+
 async def list_alerts(
     conn: asyncpg.Connection,
     severity: Optional[str] = None,
     machine_id: Optional[str] = None,
     acknowledged: Optional[bool] = None,
+    status: Optional[str] = None,
     sort: str = "severity",
+    include_resolved: bool = False,
 ) -> tuple[list[dict], dict[str, int]]:
-    """Build alerts from unresolved alarm_events. Returns (alerts, counts_by_tier)."""
+    """Build alerts from `alarm_events`. Returns (alerts, counts_by_tier).
+
+    By default returns only non-terminal rows (active/acknowledged/
+    scheduled/snoozed). Pass `status='resolved'` (or `include_resolved=True`)
+    to include resolved alerts.
+    """
     sql = """
-        SELECT alarm_id, machine_id, timestamp, severity, description
+        SELECT alarm_id, machine_id, timestamp, severity, description,
+               status, status_changed_at, status_changed_by, status_metadata
         FROM alarm_events
-        WHERE resolved_at IS NULL
+        WHERE 1 = 1
     """
     params: list = []
+    if status:
+        if status not in VALID_STATUSES:
+            raise ValueError(f"invalid status '{status}'")
+        params.append(status)
+        sql += f" AND status = ${len(params)}"
+    elif not include_resolved:
+        sql += " AND status <> 'resolved'"
     if severity:
         params.append(severity)
         sql += f" AND severity = ${len(params)}"
@@ -107,6 +126,7 @@ async def list_alerts(
         comp = _attribute_component(r["description"])
         score, tier, window = await component_risk(conn, r["machine_id"], comp)
         title_short = r["description"].split(".")[0][:120]
+        st = r["status"] or "active"
 
         alert = {
             "alert_id": _alert_id_from_alarm(r["alarm_id"]),
@@ -120,14 +140,22 @@ async def list_alerts(
             "recommended_action": _RECOMMENDED_BY_COMPONENT.get(comp, "Investigate and schedule maintenance."),
             "estimated_cost_if_unaddressed_usd": _COST_BY_COMPONENT.get(comp, 25_000),
             "created_at": _iso(r["timestamp"]),
-            "acknowledged": False,
+            "acknowledged": st in ("acknowledged", "scheduled", "snoozed", "resolved"),
+            "status": st,
+            "status_changed_at": _iso(r["status_changed_at"]) if r["status_changed_at"] else None,
+            "status_changed_by": r["status_changed_by"],
+            "status_metadata": _decode_metadata(r["status_metadata"]),
+            # Surface as a top-level "_status" too: the existing frontend
+            # filters on alert._status — keeping that field populated lets
+            # the screen tabs (Active/Ack/Scheduled/Snoozed/Resolved)
+            # pivot off real DB state instead of localStorage.
+            "_status": st,
         }
         alerts.append(alert)
 
     if acknowledged is not None:
         alerts = [a for a in alerts if a["acknowledged"] == acknowledged]
 
-    # Sort
     sev_order = {"critical": 0, "warning": 1, "info": 2}
     if sort == "severity":
         alerts.sort(key=lambda a: (sev_order.get(a["severity"], 9), -a["risk_score"]))
@@ -136,7 +164,6 @@ async def list_alerts(
     else:  # created_at
         alerts.sort(key=lambda a: a["created_at"], reverse=True)
 
-    # Counts by tier
     counts: dict[str, int] = {"critical": 0, "warning": 0, "watch": 0, "healthy": 0}
     for a in alerts:
         counts[tier_for(a["risk_score"])] += 1
@@ -148,7 +175,8 @@ async def get_alert(conn: asyncpg.Connection, alert_id: str) -> Optional[dict]:
     alarm_id = _alarm_id_from_alert(alert_id)
     row = await conn.fetchrow(
         """
-        SELECT alarm_id, machine_id, timestamp, severity, description
+        SELECT alarm_id, machine_id, timestamp, severity, description,
+               status, status_changed_at, status_changed_by, status_metadata
         FROM alarm_events
         WHERE alarm_id = $1
         """,
@@ -158,6 +186,7 @@ async def get_alert(conn: asyncpg.Connection, alert_id: str) -> Optional[dict]:
         return None
     comp = _attribute_component(row["description"])
     score, tier, window = await component_risk(conn, row["machine_id"], comp)
+    st = row["status"] or "active"
     return {
         "alert_id": alert_id,
         "machine_id": row["machine_id"],
@@ -170,8 +199,77 @@ async def get_alert(conn: asyncpg.Connection, alert_id: str) -> Optional[dict]:
         "recommended_action": _RECOMMENDED_BY_COMPONENT.get(comp, "Investigate and schedule maintenance."),
         "estimated_cost_if_unaddressed_usd": _COST_BY_COMPONENT.get(comp, 25_000),
         "created_at": _iso(row["timestamp"]),
-        "acknowledged": False,
+        "acknowledged": st in ("acknowledged", "scheduled", "snoozed", "resolved"),
+        "status": st,
+        "status_changed_at": _iso(row["status_changed_at"]) if row["status_changed_at"] else None,
+        "status_changed_by": row["status_changed_by"],
+        "status_metadata": _decode_metadata(row["status_metadata"]),
+        "_status": st,
     }
+
+
+# ---------------------------------------------------------------------------
+# Status mutation — persists the alert through its triage workflow.
+# ---------------------------------------------------------------------------
+
+async def set_alert_status(
+    conn: asyncpg.Connection,
+    alert_id: str,
+    *,
+    new_status: str,
+    changed_by: str,
+    metadata: Optional[dict] = None,
+    mark_resolved_at: bool = False,
+) -> Optional[dict]:
+    """Update one alarm_events row. Returns the updated alert payload (same
+    shape as `get_alert`) or None if the alert doesn't exist."""
+    if new_status not in VALID_STATUSES:
+        raise ValueError(f"invalid status '{new_status}'")
+    alarm_id = _alarm_id_from_alert(alert_id)
+
+    import json
+    sql = """
+        UPDATE alarm_events
+        SET status = $2,
+            status_changed_at = NOW(),
+            status_changed_by = $3,
+            status_metadata = $4::jsonb,
+            resolved_at = CASE
+                WHEN $5::bool THEN COALESCE(resolved_at, NOW())
+                ELSE resolved_at
+            END
+        WHERE alarm_id = $1
+        RETURNING alarm_id
+    """
+    updated = await conn.fetchval(
+        sql,
+        alarm_id, new_status, changed_by,
+        json.dumps(metadata or {}, default=str),
+        mark_resolved_at,
+    )
+    if not updated:
+        return None
+    return await get_alert(conn, alert_id)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _decode_metadata(raw) -> dict:
+    """`status_metadata` arrives from asyncpg as either a parsed dict (rare)
+    or a JSON string (typical). Normalise to a dict."""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="replace")
+    try:
+        import json
+        return json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _alert_id_from_alarm(alarm_id: str) -> str:

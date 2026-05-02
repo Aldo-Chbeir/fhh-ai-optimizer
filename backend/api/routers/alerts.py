@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 import asyncpg
 
 from ..db import get_conn
@@ -12,8 +12,10 @@ from ..models import (
     Alert, AlertList, AlarmList, Alarm,
     MaintenanceLogList, MaintenanceLogEntry,
     AlarmSeverity, AlertSort, AlertsKPIs,
+    AlertStatus, AlertStatusUpdate,
+    AcknowledgeBody, ScheduleBody, SnoozeBody, ResolveBody,
 )
-from ..services.alerts import list_alerts, get_alert
+from ..services.alerts import list_alerts, get_alert, set_alert_status
 from ..services.constants import VALID_MACHINE_IDS
 
 router = APIRouter(tags=["maintenance"])
@@ -28,8 +30,18 @@ async def get_alerts(
     severity: Optional[AlarmSeverity] = Query(None),
     machine_id: Optional[str] = Query(None),
     acknowledged: Optional[bool] = Query(None),
+    status: Optional[AlertStatus] = Query(
+        None,
+        description="Filter by triage status. Without this filter the "
+                    "endpoint returns active/acknowledged/scheduled/snoozed "
+                    "(everything except resolved).",
+    ),
     sort: AlertSort = Query(AlertSort.SEVERITY),
     limit: Optional[int] = Query(None, ge=1, le=200),
+    include_resolved: bool = Query(
+        False,
+        description="When no `status` filter is set, also include resolved alerts.",
+    ),
     conn: asyncpg.Connection = Depends(get_conn),
 ) -> AlertList:
     if machine_id is not None and machine_id not in VALID_MACHINE_IDS:
@@ -39,7 +51,9 @@ async def get_alerts(
         severity=severity.value if severity else None,
         machine_id=machine_id,
         acknowledged=acknowledged,
+        status=status.value if status else None,
         sort=sort.value,
+        include_resolved=include_resolved,
     )
     if limit is not None:
         alerts = alerts[:limit]
@@ -50,20 +64,127 @@ async def get_alerts(
     )
 
 
+# -----------------------------------------------------------------------------
+# PATCH endpoints — persist alert state through the triage workflow
+# -----------------------------------------------------------------------------
+
+def _to_status_update(payload: dict) -> AlertStatusUpdate:
+    return AlertStatusUpdate(
+        id=payload["alert_id"],
+        status=payload["status"],
+        status_changed_at=payload.get("status_changed_at"),
+        status_metadata=payload.get("status_metadata") or {},
+    )
+
+
+@router.patch("/alerts/{alert_id}/acknowledge", response_model=AlertStatusUpdate)
+async def patch_alert_acknowledge(
+    alert_id: str,
+    body: AcknowledgeBody = Body(...),
+    conn: asyncpg.Connection = Depends(get_conn),
+) -> AlertStatusUpdate:
+    """Move an alert into the `acknowledged` state. The technician/operator
+    name is stored on `status_changed_by`; optional notes go into
+    `status_metadata.notes`."""
+    metadata = {"notes": body.notes} if body.notes else {}
+    payload = await set_alert_status(
+        conn, alert_id,
+        new_status="acknowledged",
+        changed_by=body.acknowledged_by,
+        metadata=metadata,
+    )
+    if payload is None:
+        raise AlertNotFound(alert_id)
+    return _to_status_update(payload)
+
+
+@router.patch("/alerts/{alert_id}/schedule", response_model=AlertStatusUpdate)
+async def patch_alert_schedule(
+    alert_id: str,
+    body: ScheduleBody = Body(...),
+    conn: asyncpg.Connection = Depends(get_conn),
+) -> AlertStatusUpdate:
+    """Move an alert into `scheduled` and capture the maintenance plan
+    (date / technician / priority / notes) inside `status_metadata`."""
+    metadata = {
+        "scheduled_date": body.scheduled_date,
+        "technician": body.technician,
+        "priority": body.priority,
+    }
+    if body.notes:
+        metadata["notes"] = body.notes
+    payload = await set_alert_status(
+        conn, alert_id,
+        new_status="scheduled",
+        changed_by=body.technician,
+        metadata=metadata,
+    )
+    if payload is None:
+        raise AlertNotFound(alert_id)
+    return _to_status_update(payload)
+
+
+@router.patch("/alerts/{alert_id}/snooze", response_model=AlertStatusUpdate)
+async def patch_alert_snooze(
+    alert_id: str,
+    body: SnoozeBody = Body(...),
+    conn: asyncpg.Connection = Depends(get_conn),
+) -> AlertStatusUpdate:
+    """Move an alert into `snoozed`. `snooze_until` is stored on
+    `status_metadata` so a future scheduler can re-activate the alert."""
+    metadata = {"snooze_until": body.snooze_until}
+    if body.reason:
+        metadata["reason"] = body.reason
+    payload = await set_alert_status(
+        conn, alert_id,
+        new_status="snoozed",
+        changed_by="system",
+        metadata=metadata,
+    )
+    if payload is None:
+        raise AlertNotFound(alert_id)
+    return _to_status_update(payload)
+
+
+@router.patch("/alerts/{alert_id}/resolve", response_model=AlertStatusUpdate)
+async def patch_alert_resolve(
+    alert_id: str,
+    body: ResolveBody = Body(...),
+    conn: asyncpg.Connection = Depends(get_conn),
+) -> AlertStatusUpdate:
+    """Move an alert into `resolved`. Sets `resolved_at = NOW()` if it
+    wasn't already set so the existing alarm-events analytics keep working."""
+    metadata = {}
+    if body.resolution_notes:
+        metadata["resolution_notes"] = body.resolution_notes
+    payload = await set_alert_status(
+        conn, alert_id,
+        new_status="resolved",
+        changed_by=body.resolved_by,
+        metadata=metadata,
+        mark_resolved_at=True,
+    )
+    if payload is None:
+        raise AlertNotFound(alert_id)
+    return _to_status_update(payload)
+
+
 @router.get("/alerts/kpis", response_model=AlertsKPIs)
 async def get_alerts_kpis(
     conn: asyncpg.Connection = Depends(get_conn),
 ) -> AlertsKPIs:
     """UI extension — aggregate counters + 7-day sparklines for the
     Alerts triage screen header. Not part of API_CONTRACT.md v1.1."""
-    # Active critical / warning counts (unresolved alarms)
+    # Active critical / warning counts. "Active" now means status='active'
+    # (still pre-triage); rows the operator has acknowledged / scheduled /
+    # snoozed are no longer in this count.
     crit_active = await conn.fetchval(
         "SELECT COUNT(*) FROM alarm_events "
-        "WHERE severity='critical' AND resolved_at IS NULL"
+        "WHERE severity='critical' AND status='active'"
     ) or 0
     warn_active = await conn.fetchval(
         "SELECT COUNT(*) FROM alarm_events "
-        "WHERE severity='warning' AND resolved_at IS NULL"
+        "WHERE severity='warning' AND status='active'"
     ) or 0
 
     # 7-day sparklines from alarm_events daily counts (newest day on the right)
@@ -140,6 +261,15 @@ async def get_alerts_kpis(
         datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     )
 
+    # Per-status counts so the UI tabs (Active / Acknowledged / Scheduled /
+    # Snoozed / Resolved) reflect real DB state rather than localStorage.
+    status_rows = await conn.fetch(
+        "SELECT status, COUNT(*) AS n FROM alarm_events GROUP BY status"
+    )
+    counts_by_status = {row["status"]: int(row["n"]) for row in status_rows}
+    for s in ("active", "acknowledged", "scheduled", "snoozed", "resolved"):
+        counts_by_status.setdefault(s, 0)
+
     return AlertsKPIs(
         active_critical=int(crit_active),
         critical_sparkline_7d=crit_spark,
@@ -150,6 +280,7 @@ async def get_alerts_kpis(
         acknowledged_today=int(ack_today),
         acknowledged_today_total=int(ack_total),
         last_updated=last_iso,
+        counts_by_status=counts_by_status,
     )
 
 
