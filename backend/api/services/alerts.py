@@ -17,6 +17,7 @@ from typing import Optional
 
 import asyncpg
 
+from ..db import get_pool
 from .constants import COMPONENT_ORDER, tier_for
 from .risk import component_risk
 
@@ -98,18 +99,28 @@ _risk_cache: dict[_RiskCacheKey, tuple[float, int, str, "Optional[int]"]] = {}
 
 
 async def _resolve_risk_with_ttl(
-    conn: "asyncpg.Connection", machine_id: str, component_id: str,
+    pool: "asyncpg.Pool", machine_id: str, component_id: str,
 ) -> tuple[int, str, "Optional[int]"]:
     """Cache wrapper around `component_risk` keyed on (machine, component)
     with a `_RISK_TTL_SECONDS` TTL. The list endpoint calls this per
-    unique pair instead of per row."""
+    unique pair instead of per row.
+
+    On cache miss this acquires its own connection from the pool — it
+    must NOT reuse the caller's connection, because the list endpoint
+    fans these calls out through `asyncio.gather` and asyncpg
+    connections are not safe for concurrent use (one query in flight
+    per connection). Sharing a connection here trips
+    `InterfaceError: cannot perform operation: another operation is in
+    progress` and turns /alerts into a 500.
+    """
     now = _time.time()
     cached = _risk_cache.get((machine_id, component_id))
     if cached is not None:
         ts, score, tier, window = cached
         if now - ts < _RISK_TTL_SECONDS:
             return score, tier, window
-    score, tier, window = await component_risk(conn, machine_id, component_id)
+    async with pool.acquire() as conn:
+        score, tier, window = await component_risk(conn, machine_id, component_id)
     _risk_cache[(machine_id, component_id)] = (now, score, tier, window)
     return score, tier, window
 
@@ -119,21 +130,27 @@ def reset_risk_cache() -> None:
     _risk_cache.clear()
 
 
-async def warm_risk_cache(conn: "asyncpg.Connection") -> int:
+async def warm_risk_cache(pool: "asyncpg.Pool") -> int:
     """Pre-populate the risk cache for every (machine, component) pair in
     the fleet. Called from the FastAPI lifespan on startup as a
     fire-and-forget task so the first /alerts request hits warm data
     instead of paying ~7s of ML inference. Returns the number of pairs
-    successfully resolved."""
-    rows = await conn.fetch(
-        "SELECT machine_id, component_id FROM components ORDER BY machine_id, component_id"
-    )
+    successfully resolved.
+
+    Takes the pool (not a connection) because each pair is resolved
+    concurrently via `asyncio.gather` — see `_resolve_risk_with_ttl`
+    for the asyncpg concurrency rationale.
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT machine_id, component_id FROM components ORDER BY machine_id, component_id"
+        )
     pairs = [(r["machine_id"], r["component_id"]) for r in rows]
     if not pairs:
         return 0
     import asyncio
     results = await asyncio.gather(
-        *[_resolve_risk_with_ttl(conn, m, c) for m, c in pairs],
+        *[_resolve_risk_with_ttl(pool, m, c) for m, c in pairs],
         return_exceptions=True,
     )
     return sum(1 for r in results if not isinstance(r, BaseException))
@@ -195,10 +212,18 @@ async def list_alerts(
     # resolved concurrently so the ML inference + DB feature build for one
     # pair overlaps with the others; cuts cold latency by ~3-5x. ML libs
     # release the GIL during numpy-heavy work so this is real parallelism.
+    #
+    # NB: hand the POOL — not the route's `conn` — into the gather. asyncpg
+    # connections are single-query-at-a-time; each coroutine here must
+    # acquire its own connection or they trip `InterfaceError: cannot
+    # perform operation: another operation is in progress`. The route's
+    # `conn` stays live above for the initial fetch and is released after
+    # this function returns.
     pairs_list = sorted(pairs_needed)
+    pool = get_pool()
     import asyncio
     risk_results = await asyncio.gather(*[
-        _resolve_risk_with_ttl(conn, m, c) for m, c in pairs_list
+        _resolve_risk_with_ttl(pool, m, c) for m, c in pairs_list
     ])
     risk_by_pair: dict[tuple[str, str], tuple[int, str, "Optional[int]"]] = {
         pair: result for pair, result in zip(pairs_list, risk_results)

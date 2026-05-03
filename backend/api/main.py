@@ -53,10 +53,12 @@ async def _warm_alert_risk_cache_bg() -> None:
         # warmup on the same connection pool.
         await asyncio.sleep(0.5)
         pool = get_pool()
-        async with pool.acquire() as conn:
-            t0 = time.perf_counter()
-            n = await warm_risk_cache(conn)
-            log.info("alerts risk-cache warmup: %d pairs in %.1fs", n, time.perf_counter() - t0)
+        t0 = time.perf_counter()
+        # Hand the pool to warm_risk_cache directly — it fans out concurrent
+        # per-pair lookups, each on its own connection (asyncpg connections
+        # aren't safe to share across concurrent queries).
+        n = await warm_risk_cache(pool)
+        log.info("alerts risk-cache warmup: %d pairs in %.1fs", n, time.perf_counter() - t0)
     except Exception as exc:  # noqa: BLE001
         log.warning("alerts risk-cache warmup skipped: %s", exc)
 
@@ -99,6 +101,15 @@ app = FastAPI(
 
 # ---- Middleware --------------------------------------------------------------
 
+# Middleware stack note: Starlette adds middleware LIFO — whatever is added
+# last wraps the others (= outermost). The CORS middleware must be outermost
+# so error responses (5xx) still carry `Access-Control-Allow-Origin`. With
+# CORS inside the access-log/exception layers, an unhandled exception
+# bubbling through a `BaseHTTPMiddleware` (like AccessLogMiddleware) can
+# bypass CORS's wrapped `send` and ship a header-less 500 — which the
+# browser then mis-reports as a CORS error rather than the real 500.
+app.add_middleware(AccessLogMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -114,8 +125,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.add_middleware(AccessLogMiddleware)
 
 
 # ---- Error handlers ----------------------------------------------------------
