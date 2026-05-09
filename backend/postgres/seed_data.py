@@ -408,7 +408,7 @@ INSERTS: dict[str, str] = {
         VALUES (:log_id, :component_id, :machine_id, :maintenance_type,
                 :date_performed, :cost_usd, :downtime_hours,
                 :technician, :notes)
-        ON CONFLICT (log_id) DO NOTHING
+        ON CONFLICT (log_id, date_performed) DO NOTHING
     """,
     "alarm_events": """
         INSERT INTO alarm_events (alarm_id, machine_id, timestamp, severity, description,
