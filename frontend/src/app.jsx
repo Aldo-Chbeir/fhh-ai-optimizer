@@ -9,6 +9,7 @@ function TopNav({ active, onNavigate, kpiSummary }) {
     { id: "overview", label: "Overview" },
     { id: "alerts", label: "Alerts" },
     { id: "demand_forecast", label: "Demand" },
+    { id: "calendar", label: "Calendar" },
   ];
   return (
     <header style={{
@@ -149,6 +150,7 @@ function App() {
             />
           )}
           {page === "demand_forecast" && <DemandForecastScreen />}
+          {page === "calendar" && <CalendarScreen />}
         </main>
       </div>
     </div>

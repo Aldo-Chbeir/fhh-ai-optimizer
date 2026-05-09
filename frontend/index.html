@@ -54,6 +54,15 @@
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
   <!--
+    FullCalendar v6 "Standard Bundle" (UMD, classic-script). Exposes
+    window.FullCalendar.{Calendar, ...plugins}. CSS is auto-injected by
+    the bundle on first construction, so no separate <link> needed.
+    Loaded as a regular <script> (not type="module") so it slots into
+    the existing global-script pattern alongside React/ReactDOM/Babel.
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
+
+  <!--
     Live API client. Replaces the legacy mock_data.jsx (kept on disk as
     mock_data.jsx.bak). Loads BEFORE any screen so window.api is defined
     by the time React renders.
@@ -68,6 +77,7 @@
   <script type="text/babel" src="src/machine_detail.jsx"></script>
   <script type="text/babel" src="src/alerts.jsx"></script>
   <script type="text/babel" src="src/demand_forecast.jsx"></script>
+  <script type="text/babel" src="src/calendar.jsx"></script>
   <script type="text/babel" src="src/chat.jsx"></script>
   <script type="text/babel" src="src/app.jsx"></script>
 </body>
