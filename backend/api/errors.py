@@ -88,6 +88,22 @@ class ConversationNotFound(APIError):
         super().__init__(f"No conversation with ID '{cid}'.")
 
 
+class OrderNotFound(APIError):
+    code = "invalid_request"
+    status_code = 404
+
+    def __init__(self, order_id: str) -> None:
+        super().__init__(f"No material order exists with ID '{order_id}'.")
+
+
+class CalendarEventNotFound(APIError):
+    code = "invalid_request"
+    status_code = 404
+
+    def __init__(self, event_id: str) -> None:
+        super().__init__(f"No calendar event exists with ID '{event_id}'.")
+
+
 class InvalidRequest(APIError):
     code = "invalid_request"
     status_code = 400

@@ -30,6 +30,14 @@ from .chat import (
 )
 from .kpis import KPIOverview, CostSavings, MachineCostBreakdown
 from .predictions import Prediction, PredictionList
+from .material_orders import (
+    MaterialOrder, MaterialOrderCreate, MaterialOrderUpdate,
+    MaterialOrderList, MaterialOrderStatus,
+)
+from .calendar import (
+    CalendarEvent, CalendarEventCreate, CalendarEventUpdate,
+    CalendarEventType, CalendarFeed, CalendarFeedItem,
+)
 from .errors import ErrorBody, ErrorResponse
 
 __all__ = [
@@ -52,5 +60,9 @@ __all__ = [
     "ConversationMessage", "Conversation", "SuggestedPrompts",
     "KPIOverview", "CostSavings", "MachineCostBreakdown",
     "Prediction", "PredictionList",
+    "MaterialOrder", "MaterialOrderCreate", "MaterialOrderUpdate",
+    "MaterialOrderList", "MaterialOrderStatus",
+    "CalendarEvent", "CalendarEventCreate", "CalendarEventUpdate",
+    "CalendarEventType", "CalendarFeed", "CalendarFeedItem",
     "ErrorBody", "ErrorResponse",
 ]

@@ -23,12 +23,14 @@ from .logging_middleware import AccessLogMiddleware, configure_logging
 from .routers import (
     admin as admin_router,
     alerts as alerts_router,
+    calendar as calendar_router,
     chat as chat_router,
     components as components_router,
     demand as demand_router,
     health as health_router,
     kpis as kpis_router,
     machines as machines_router,
+    material_orders as material_orders_router,
     risk as risk_router,
     sensors as sensors_router,
 )
@@ -145,6 +147,8 @@ app.include_router(demand_router.router)
 app.include_router(chat_router.router)
 app.include_router(kpis_router.router)
 app.include_router(admin_router.router)
+app.include_router(material_orders_router.router)
+app.include_router(calendar_router.router)
 
 
 @app.get("/", include_in_schema=False)
