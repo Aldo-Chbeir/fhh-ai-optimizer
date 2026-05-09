@@ -21,9 +21,10 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Claude Code per-machine state
-.claude/settings.local.json
+# Claude Code per-session worktrees and machine-local state
+.claude/
 
 # Trained model artifacts (not committed; rebuild via the train_* commands).
 # The .gitkeep files keep empty directories tracked so a fresh clone has
