@@ -83,12 +83,21 @@ CREATE TABLE IF NOT EXISTS alarm_events (
     severity          TEXT         NOT NULL CHECK (severity IN ('info','warning','critical')),
     description       TEXT         NOT NULL,
     resolved_at       TIMESTAMPTZ,
-    downtime_minutes  INTEGER      NOT NULL DEFAULT 0
+    downtime_minutes  INTEGER      NOT NULL DEFAULT 0,
+    status            TEXT         NOT NULL DEFAULT 'active'
+                                   CHECK (status IN ('active','acknowledged','scheduled','snoozed','resolved')),
+    status_changed_at TIMESTAMPTZ,
+    status_changed_by TEXT,
+    status_metadata   JSONB        NOT NULL DEFAULT '{}'::jsonb
 );
 CREATE INDEX IF NOT EXISTS idx_alarm_events_machine_time
     ON alarm_events (machine_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_alarm_events_unresolved
     ON alarm_events (machine_id) WHERE resolved_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_alarm_events_status_machine
+    ON alarm_events (status, machine_id);
+CREATE INDEX IF NOT EXISTS idx_alarm_events_status_changed_at
+    ON alarm_events (status_changed_at DESC);
 
 -- ----------------------------------------------------------------------------
 -- quality_scans  (QCS readings, hourly per active run)
