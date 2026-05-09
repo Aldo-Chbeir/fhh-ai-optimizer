@@ -178,9 +178,15 @@ async def _query_scheduled(pool: asyncpg.Pool, start: date, end: date) -> list[d
     out = []
     for r in rows:
         meta = _decode_metadata(r["status_metadata"])
+        alarm_id = r["alarm_id"]
+        # Same alm- → alt- mapping that services/alerts.py applies, surfaced
+        # so the EventDetailModal can display the user-facing alert_id for
+        # a scheduled_maintenance row (parity with source='alert' items).
+        alert_id = ("alt-" + alarm_id[4:]) if alarm_id.startswith("alm-") else alarm_id
         out.append({
             "source":     "scheduled_maintenance",
-            "id":         r["alarm_id"],
+            "id":         alarm_id,
+            "alert_id":   alert_id,
             "date":       meta.get("scheduled_date"),
             "title":      r["description"],
             "machine_id": r["machine_id"],

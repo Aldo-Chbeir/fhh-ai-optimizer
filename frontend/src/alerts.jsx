@@ -346,8 +346,8 @@ function TrendArrow({ trend }) {
 function StatusPill({ status, alert }) {
   const m = STATUS_META[status] || STATUS_META.active;
   let label = m.label;
-  if (status === "scheduled" && alert?._scheduled_for) label = `Scheduled · ${alert._scheduled_for}`;
-  if (status === "snoozed"   && alert?._snoozed_until) label = `Snoozed · ${formatRelativeFuture(alert._snoozed_until)}`;
+  if (status === "scheduled" && alert?.status_metadata?.scheduled_date) label = `Scheduled · ${alert.status_metadata.scheduled_date}`;
+  if (status === "snoozed"   && alert?.status_metadata?.snooze_until)   label = `Snoozed · ${formatRelativeFuture(alert.status_metadata.snooze_until)}`;
   return (
     <span style={{
       display: "inline-flex", alignItems: "center", gap: 5,
@@ -436,7 +436,11 @@ function OverflowMenu({ alert, onAct }) {
 
 function AlertCard({ alert, onOpenMachine, onAck, onSchedule, onSnooze, onResolve, onAddNote, bulkMode, checked, onToggleCheck }) {
   const sevMeta = SEV_META[alert.severity];
-  const status = alert._status || "active";
+  // _status is set by optimistic mutations; status comes from the server.
+  // Backend-loaded alerts only have `status` (the Pydantic model strips
+  // `_status`), so we need both fallbacks or every server-loaded alert
+  // renders as "active" regardless of its real triage state.
+  const status = alert._status || alert.status || "active";
   const dim = status === "acknowledged" || status === "resolved" || status === "snoozed";
   const isHot = alert.severity === "critical" || alert.severity === "warning";
   return (
@@ -538,18 +542,18 @@ function AlertCard({ alert, onOpenMachine, onAck, onSchedule, onSnooze, onResolv
             )}
           </div>
         )}
-        {(status === "acknowledged" || status === "scheduled") && alert._ack_by && (
+        {(status === "acknowledged" || status === "scheduled") && alert.status_changed_by && (
           <div style={{ fontSize: 11.5, color: "#1F4FB1", marginTop: 2 }}>
-            ✓ Acknowledged by {alert._ack_by} · {formatRelative(alert._ack_at)}
-            {status === "scheduled" && alert._scheduled_for && ` · 📅 Scheduled ${alert._scheduled_for}`}
+            ✓ Acknowledged by {alert.status_changed_by} · {formatRelative(alert.status_changed_at)}
+            {status === "scheduled" && alert.status_metadata?.scheduled_date && ` · 📅 Scheduled ${alert.status_metadata.scheduled_date}`}
           </div>
         )}
         {status === "resolved" && (
           <div style={{ fontSize: 11.5, color: "#0F8B5C", marginTop: 2, lineHeight: 1.45 }}>
-            ✓ Resolved by {alert._resolved_by} · {formatRelative(alert._resolved_at)}
-            {alert._resolution_notes && (
+            ✓ Resolved by {alert.status_changed_by} · {formatRelative(alert.status_changed_at)}
+            {alert.status_metadata?.resolution_notes && (
               <div style={{ color: "#6B7280", fontWeight: 400, marginTop: 2 }}>
-                {alert._resolution_notes}
+                {alert.status_metadata.resolution_notes}
               </div>
             )}
           </div>
@@ -967,7 +971,7 @@ function AlertsScreen({ onOpenMachine }) {
   // apply tab + filters + search + sort
   const visible = useMemoAlerts(() => {
     let list = merged;
-    if (tab !== "all") list = list.filter((a) => (a._status || "active") === tab);
+    if (tab !== "all") list = list.filter((a) => (a._status || a.status || "active") === tab);
     if (machineFilter.length) list = list.filter((a) => machineFilter.includes(a.machine_id));
     if (sevFilter.length)     list = list.filter((a) => sevFilter.includes(a.severity));
     if (compFilter.length)    list = list.filter((a) => compFilter.includes(a.component_id));
