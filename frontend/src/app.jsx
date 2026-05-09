@@ -149,7 +149,11 @@ function App() {
               onOpenMachine={(id) => { setCurrentMachine(id); setPage("machine_detail"); }}
             />
           )}
-          {page === "demand_forecast" && <DemandForecastScreen />}
+          {page === "demand_forecast" && (
+            <DemandForecastScreen
+              onNavigate={(p) => { setPage(p); setCurrentMachine(null); setCurrentComponent(null); }}
+            />
+          )}
           {page === "calendar" && <CalendarScreen />}
         </main>
       </div>

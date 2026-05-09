@@ -318,7 +318,7 @@ function CustomToolbar({
 
 
 // ─── MonthAgendaView ───────────────────────────────────────────────────────
-function EventLine({ event }) {
+function EventLine({ event, onClick }) {
   const style = SOURCE_STYLE[event.source] || { bg: "#9CA3AF" };
   // event.date is YYYY-MM-DD; appending T00:00:00 forces local-time parse
   // (otherwise Date(YYYY-MM-DD) is treated as UTC, which can shift one day
@@ -326,10 +326,17 @@ function EventLine({ event }) {
   const dt = new Date(event.date + "T00:00:00");
   const dateLabel = dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: 10,
-      fontSize: 13, color: "#374151", lineHeight: 1.4,
-    }}>
+    <div
+      onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
+      onMouseEnter={onClick ? (e) => { e.currentTarget.style.background = "#F4F6FA"; } : undefined}
+      onMouseLeave={onClick ? (e) => { e.currentTarget.style.background = "transparent"; } : undefined}
+      style={{
+        display: "flex", alignItems: "center", gap: 10,
+        fontSize: 13, color: "#374151", lineHeight: 1.4,
+        cursor: onClick ? "pointer" : "default",
+        padding: "2px 4px", margin: "0 -4px", borderRadius: 4,
+        transition: "background 100ms",
+      }}>
       <span style={{
         width: 8, height: 8, borderRadius: "50%", background: style.bg,
         flexShrink: 0,
@@ -344,7 +351,7 @@ function EventLine({ event }) {
 }
 
 
-function WeekRow({ week, weekNum, events, isLast, onClick }) {
+function WeekRow({ week, weekNum, events, isLast, onClick, onEventClick }) {
   const [hovered, setHovered] = useStateCal(false);
   const startStr = week.start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   const endStr   = week.end.toLocaleDateString("en-US",   { month: "short", day: "numeric" });
@@ -390,7 +397,11 @@ function WeekRow({ week, weekNum, events, isLast, onClick }) {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {events.map((e) => (
-            <EventLine key={`${e.source}:${e.id}`} event={e} />
+            <EventLine
+              key={`${e.source}:${e.id}`}
+              event={e}
+              onClick={onEventClick ? () => onEventClick(e) : undefined}
+            />
           ))}
         </div>
       )}
@@ -399,7 +410,7 @@ function WeekRow({ week, weekNum, events, isLast, onClick }) {
 }
 
 
-function MonthAgendaView({ focalDate, events, loading, error, onRetry, onWeekClick }) {
+function MonthAgendaView({ focalDate, events, loading, error, onRetry, onWeekClick, onEventClick }) {
   const monthStart = useMemoCal(() => firstOfMonth(focalDate), [focalDate]);
   const weeks      = useMemoCal(() => getMonthWeeks(monthStart), [monthStart]);
   const buckets    = useMemoCal(() => bucketEventsByWeek(events, weeks), [events, weeks]);
@@ -431,6 +442,7 @@ function MonthAgendaView({ focalDate, events, loading, error, onRetry, onWeekCli
             events={buckets[i]}
             isLast={i === weeks.length - 1}
             onClick={() => onWeekClick(w.start)}
+            onEventClick={onEventClick}
           />
         ))}
       </div>
@@ -742,6 +754,141 @@ function CalendarStyles() {
 }
 
 
+// ─── EventDetailModal ─────────────────────────────────────────────────────
+// Opens on event click from any view (Day, Week, Month-agenda). Year mode
+// stays non-interactive — dots are too small and represent multiple events
+// per day after dedup.
+function EventDetailModal({ event, onClose }) {
+  if (!event) return null;
+
+  // Local map (kept inside the function to avoid module-global names that
+  // would compete with other classic-script files in this codebase — same
+  // reasoning as the CalendarLegend rename earlier in the file).
+  const SINGULAR = {
+    alert:                 "Active alert",
+    scheduled_maintenance: "Scheduled maintenance",
+    past_maintenance:      "Past maintenance",
+    material_order:        "Material order",
+    custom:                "Custom event",
+  };
+  const style       = SOURCE_STYLE[event.source] || { bg: "#9CA3AF", text: "#FFFFFF" };
+  const sourceLabel = SINGULAR[event.source] || event.source;
+
+  const dt = new Date(event.date + "T00:00:00");
+  const dateLabel = dt.toLocaleDateString("en-US", {
+    weekday: "long", month: "long", day: "numeric", year: "numeric",
+  });
+  const shortDate = (s) => new Date(s + "T00:00:00").toLocaleDateString("en-US", {
+    month: "short", day: "numeric", year: "numeric",
+  });
+
+  // Source-specific labelled rows
+  const fields = [];
+  if (event.source === "alert") {
+    if (event.severity)   fields.push({ label: "Severity", value: event.severity, capitalize: true });
+    if (event.status)     fields.push({ label: "Status",   value: event.status,   capitalize: true });
+    if (event.machine_id) fields.push({ label: "Machine",  value: event.machine_id });
+    if (event.alert_id)   fields.push({ label: "Alert ID", value: event.alert_id });
+  } else if (event.source === "scheduled_maintenance") {
+    if (event.machine_id) fields.push({ label: "Machine",    value: event.machine_id });
+    if (event.technician) fields.push({ label: "Technician", value: event.technician });
+    if (event.priority)   fields.push({ label: "Priority",   value: event.priority, capitalize: true });
+  } else if (event.source === "past_maintenance") {
+    if (event.machine_id)             fields.push({ label: "Machine",    value: event.machine_id });
+    if (event.technician)             fields.push({ label: "Technician", value: event.technician });
+    if (event.downtime_hours != null) fields.push({ label: "Downtime",   value: `${event.downtime_hours} h` });
+    if (event.cost_usd != null)       fields.push({ label: "Cost",       value: `$${Number(event.cost_usd).toLocaleString()}` });
+  } else if (event.source === "material_order") {
+    // Show BOTH dates regardless of whether user clicked the placed or
+    // arrives event — both items carry both dates from the backend.
+    if (event.order_date)            fields.push({ label: "Ordered", value: shortDate(event.order_date) });
+    if (event.expected_arrival_date) fields.push({ label: "Arrives", value: shortDate(event.expected_arrival_date) });
+    if (event.sku)                   fields.push({ label: "SKU",     value: event.sku });
+    if (event.market)                fields.push({ label: "Market",  value: String(event.market).toUpperCase() });
+    if (event.quantity != null) {
+      fields.push({ label: "Quantity",
+        value: `${Number(event.quantity).toLocaleString()} ${event.unit || ""}`.trim() });
+    }
+    if (event.status) fields.push({ label: "Status", value: event.status, capitalize: true });
+  } else if (event.source === "custom") {
+    if (event.machine_id)               fields.push({ label: "Machine",  value: event.machine_id });
+    if (event.event_type)               fields.push({ label: "Type",     value: event.event_type, capitalize: true });
+    if (event.event_time)               fields.push({ label: "Time",     value: event.event_time });
+    if (event.duration_minutes != null) fields.push({ label: "Duration", value: `${event.duration_minutes} min` });
+  }
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 100,
+      background: "rgba(10,31,68,0.45)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: 24,
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: "white", borderRadius: 12, width: 480, maxWidth: "100%",
+        padding: "22px 24px", boxShadow: "0 20px 60px rgba(10,31,68,0.25)",
+        display: "flex", flexDirection: "column", gap: 14,
+      }}>
+        <div>
+          <span style={{
+            display: "inline-block",
+            background: style.bg, color: style.text,
+            fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
+            textTransform: "uppercase",
+            padding: "3px 10px", borderRadius: 999,
+            marginBottom: 8,
+          }}>{sourceLabel}</span>
+          <div style={{
+            fontSize: 18, fontWeight: 600, color: "#0A1F44",
+            letterSpacing: -0.3, lineHeight: 1.3,
+          }}>{event.title}</div>
+          <div style={{ fontSize: 12.5, color: "#6B7280", marginTop: 4 }}>
+            {dateLabel}
+          </div>
+        </div>
+
+        {fields.length > 0 && (
+          <div style={{
+            display: "grid", gridTemplateColumns: "max-content 1fr",
+            gap: "8px 16px", fontSize: 13,
+          }}>
+            {fields.map((f, i) => (
+              <React.Fragment key={i}>
+                <div style={{ color: "#6B7280", fontWeight: 500 }}>{f.label}</div>
+                <div style={{
+                  color: "#0A1F44",
+                  textTransform: f.capitalize ? "capitalize" : "none",
+                  wordBreak: "break-word",
+                }}>{f.value}</div>
+              </React.Fragment>
+            ))}
+          </div>
+        )}
+
+        {event.notes && (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#4B5563", marginBottom: 4 }}>Notes</div>
+            <div style={{
+              fontSize: 13, color: "#374151",
+              padding: "10px 12px", background: "#F4F6FA",
+              borderRadius: 6, whiteSpace: "pre-wrap",
+            }}>{event.notes}</div>
+          </div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+          <button onClick={onClose} style={{
+            padding: "8px 14px", borderRadius: 7,
+            border: "none", background: "#0A1F44", color: "white",
+            fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+          }}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 // ─── Main screen ───────────────────────────────────────────────────────────
 function CalendarScreen() {
   const calRef = useRefCal(null);
@@ -766,6 +913,7 @@ function CalendarScreen() {
   const [yearError,   setYearError]   = useStateCal(null);
 
   const [bundleMissing, setBundleMissing] = useStateCal(false);
+  const [detailEvent,   setDetailEvent]   = useStateCal(null);
 
   useEffectCal(() => {
     if (!window.FullCalendar || !window.FullCalendar.Calendar) {
@@ -829,8 +977,7 @@ function CalendarScreen() {
     setFcEventCount(data.events.length);
   }
   function handleEventClick(info) {
-    // eslint-disable-next-line no-console
-    console.log("Calendar event clicked:", info.event.extendedProps.source_data);
+    setDetailEvent(info.event.extendedProps.source_data);
   }
   function handleNavigateToDay(date) {
     setIsYearMode(false);
@@ -963,6 +1110,7 @@ function CalendarScreen() {
               error={monthError}
               onRetry={retryMonth}
               onWeekClick={handleWeekClick}
+              onEventClick={setDetailEvent}
             />
           )}
 
@@ -978,6 +1126,12 @@ function CalendarScreen() {
           )}
         </div>
       </div>
+      {detailEvent && (
+        <EventDetailModal
+          event={detailEvent}
+          onClose={() => setDetailEvent(null)}
+        />
+      )}
     </div>
   );
 }

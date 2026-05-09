@@ -73,6 +73,11 @@ class CalendarFeedItem(BaseModel):
     market: Optional[str] = None
     quantity: Optional[float] = None
     unit: Optional[str] = None
+    # Material-order rows emit two feed items (placed + arrives); both carry
+    # both dates so the detail modal can render "Ordered: X · Arrives: Y"
+    # regardless of which item the user clicked.
+    order_date: Optional[str] = None
+    expected_arrival_date: Optional[str] = None
     event_type: Optional[str] = None
     event_time: Optional[str] = None
     duration_minutes: Optional[int] = None

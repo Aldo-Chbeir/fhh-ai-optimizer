@@ -1532,8 +1532,167 @@ function DailyDrillIn({ row, forecast, productLabel, onClose }) {
   );
 }
 
+// ───────────── ScheduleOrderModal — POST /material-orders ─────────────
+// Modal launched from the Demand toolbar's 📦 Schedule Order button.
+// Mirrors alerts.jsx ScheduleModal visually. Disambiguated input style
+// is scoped inside the function to avoid module-global collisions with
+// alerts.jsx's `modalInput` (both files share window namespace under
+// the in-browser Babel + classic-script setup).
+function ScheduleOrderModal({ market, sku, productLabel, marketLabel, onClose, onSubmit }) {
+  const today  = new Date().toISOString().slice(0, 10);
+  const plus14 = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const [quantity, setQuantity] = useStateD(5000);
+  const [unit, setUnit]                 = useStateD("cartons");
+  const [orderDate, setOrderDate]       = useStateD(today);
+  const [arrivalDate, setArrivalDate]   = useStateD(plus14);
+  const [notes, setNotes]               = useStateD("");
+  const [error, setError]               = useStateD(null);
+  const [submitting, setSubmitting]     = useStateD(false);
+
+  const inputStyle = {
+    padding: "8px 10px", border: "1px solid #DCE2EC", borderRadius: 6,
+    background: "white", fontSize: 13, color: "#0A1F44", fontFamily: "inherit",
+    outline: "none",
+  };
+
+  function handleSubmit() {
+    if (!quantity || quantity <= 0) { setError("Quantity must be greater than 0."); return; }
+    if (!orderDate)                 { setError("Order date is required."); return; }
+    if (!arrivalDate)               { setError("Expected arrival date is required."); return; }
+    if (arrivalDate < orderDate)    { setError("Expected arrival must be on or after the order date."); return; }
+    setError(null);
+    setSubmitting(true);
+    Promise.resolve(onSubmit({ quantity, unit, orderDate, arrivalDate, notes }))
+      .catch((e) => {
+        setSubmitting(false);
+        setError(e?.body?.error?.message || e?.message || "Failed to schedule order.");
+      });
+  }
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 100,
+      background: "rgba(10,31,68,0.45)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: 24,
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: "white", borderRadius: 12, width: 480, maxWidth: "100%",
+        padding: "22px 24px", boxShadow: "0 20px 60px rgba(10,31,68,0.25)",
+        display: "flex", flexDirection: "column", gap: 14,
+      }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.6,
+            textTransform: "uppercase", color: "#6B7280" }}>
+            Schedule Order
+          </div>
+          <div style={{ fontSize: 18, fontWeight: 600, color: "#0A1F44",
+            marginTop: 4, letterSpacing: -0.3 }}>
+            {marketLabel} · {productLabel}
+          </div>
+          <div style={{ fontSize: 12.5, color: "#6B7280", marginTop: 2 }}>SKU {sku}</div>
+        </div>
+
+        <div style={{ display: "flex", gap: 12 }}>
+          <label style={{ flex: 2, display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#4B5563" }}>Quantity</span>
+            <input type="number" min="1" value={quantity}
+              onChange={(e) => setQuantity(parseInt(e.target.value, 10) || 0)}
+              style={inputStyle} />
+          </label>
+          <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#4B5563" }}>Unit</span>
+            <select value={unit} onChange={(e) => setUnit(e.target.value)} style={inputStyle}>
+              <option value="cartons">cartons</option>
+              <option value="units">units</option>
+              <option value="tons">tons</option>
+            </select>
+          </label>
+        </div>
+
+        <div style={{ display: "flex", gap: 12 }}>
+          <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#4B5563" }}>Order date</span>
+            <input type="date" value={orderDate}
+              onChange={(e) => setOrderDate(e.target.value)} style={inputStyle} />
+          </label>
+          <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#4B5563" }}>Expected arrival</span>
+            <input type="date" value={arrivalDate}
+              onChange={(e) => setArrivalDate(e.target.value)} style={inputStyle} />
+          </label>
+        </div>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#4B5563" }}>Notes (optional)</span>
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3}
+            placeholder="Anything to remember about this order..."
+            style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
+        </label>
+
+        {error && (
+          <div style={{
+            padding: "8px 12px", background: "#FEF2F2", border: "1px solid #FCA5A5",
+            borderRadius: 6, fontSize: 12.5, color: "#991B1B",
+          }}>{error}</div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+          <button onClick={onClose} disabled={submitting} style={{
+            padding: "8px 14px", borderRadius: 7,
+            border: "1px solid #DCE2EC", background: "white", color: "#0A1F44",
+            fontSize: 13, fontWeight: 600,
+            cursor: submitting ? "not-allowed" : "pointer", fontFamily: "inherit",
+            opacity: submitting ? 0.5 : 1,
+          }}>Cancel</button>
+          <button onClick={handleSubmit} disabled={submitting} style={{
+            padding: "8px 14px", borderRadius: 7,
+            border: "none", background: "#0A1F44", color: "white",
+            fontSize: 13, fontWeight: 600,
+            cursor: submitting ? "wait" : "pointer", fontFamily: "inherit",
+            opacity: submitting ? 0.7 : 1,
+          }}>{submitting ? "Scheduling..." : "Schedule"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ───────────── OrderToast — bottom-right slide-in ─────────────
+// Distinct from ToastD (centered pill). White card with navy border; the
+// whole toast is clickable and routes to the Calendar tab when tapped.
+function OrderToast({ visible, message, onClick, onDismiss }) {
+  useEffectD(() => {
+    if (!visible) return;
+    const t = setTimeout(onDismiss, 4000);
+    return () => clearTimeout(t);
+  }, [visible, onDismiss]);
+
+  if (!visible) return null;
+  return (
+    <div onClick={onClick} style={{
+      position: "fixed", bottom: 24, right: 24, zIndex: 200,
+      background: "white", border: "1px solid #0A1F44", borderRadius: 8,
+      padding: "10px 14px", fontSize: 12, fontWeight: 500,
+      color: "#0A1F44", cursor: "pointer", maxWidth: 320,
+      boxShadow: "0 8px 24px rgba(10,31,68,0.18)",
+      animation: "fhhOrderToastSlide 240ms cubic-bezier(.4,0,.2,1)",
+    }}>
+      {message}
+      <style dangerouslySetInnerHTML={{ __html: `
+        @keyframes fhhOrderToastSlide {
+          from { transform: translateX(20px); opacity: 0; }
+          to   { transform: translateX(0);    opacity: 1; }
+        }
+      ` }} />
+    </div>
+  );
+}
+
+
 // ───────────── MAIN SCREEN ─────────────
-function DemandForecastScreen() {
+function DemandForecastScreen({ onNavigate }) {
   const prefs = useMemoD(loadDemandPrefs, []);
   const [market, setMarket] = useStateD(prefs.market || "uae");
   const [sku, setSku] = useStateD(prefs.sku || "fine-facial-100");
@@ -1550,6 +1709,8 @@ function DemandForecastScreen() {
   const [drillRow, setDrillRow] = useStateD(null);
   const [compareOpen, setCompareOpen] = useStateD(false);
   const [toast, setToast] = useStateD(null);
+  const [orderModalOpen, setOrderModalOpen] = useStateD(false);
+  const [orderToastVisible, setOrderToastVisible] = useStateD(false);
 
   // persist
   useEffectD(() => {
@@ -1587,6 +1748,21 @@ function DemandForecastScreen() {
 
   function showToast(msg) {
     setToast(msg); setTimeout(() => setToast(null), 2400);
+  }
+
+  // POST /material-orders. Awaited inside ScheduleOrderModal.handleSubmit
+  // so it can surface backend errors inline; we re-throw on failure.
+  async function handleScheduleOrder({ quantity, unit, orderDate, arrivalDate, notes }) {
+    await window.api.post("/material-orders", {
+      sku, market, quantity, unit,
+      order_date: orderDate,
+      expected_arrival_date: arrivalDate,
+      status: "pending",
+      created_by: "Aldo Chbeir",
+      notes: notes || null,
+    });
+    setOrderModalOpen(false);
+    setOrderToastVisible(true);
   }
 
   // build dropdown options
@@ -1678,6 +1854,15 @@ function DemandForecastScreen() {
               </span>
             )} />
           <HorizonToggle value={horizon} onChange={setHorizon} />
+          <button
+            onClick={() => setOrderModalOpen(true)}
+            style={{
+              padding: "8px 14px", borderRadius: 8,
+              border: "1px solid #DCE2EC", background: "white",
+              color: "#0A1F44", fontSize: 12.5, fontWeight: 600,
+              cursor: "pointer", fontFamily: "inherit",
+            }}
+          >📦 Schedule Order</button>
           <button
             onClick={() => setScenarioOpen(!scenarioOpen)}
             style={{
@@ -1784,6 +1969,25 @@ function DemandForecastScreen() {
       <CompareOverlay open={compareOpen} onClose={() => setCompareOpen(false)}
         baseSku={sku} baseMarket={market} products={productOpts} />
       <ToastD message={toast} />
+      {orderModalOpen && (
+        <ScheduleOrderModal
+          market={market}
+          sku={sku}
+          productLabel={productLabel}
+          marketLabel={MARKET_LABEL[market] || market}
+          onClose={() => setOrderModalOpen(false)}
+          onSubmit={handleScheduleOrder}
+        />
+      )}
+      <OrderToast
+        visible={orderToastVisible}
+        message="📦 Order scheduled · view on Calendar"
+        onClick={() => {
+          setOrderToastVisible(false);
+          if (onNavigate) onNavigate("calendar");
+        }}
+        onDismiss={() => setOrderToastVisible(false)}
+      />
     </div>
   );
 }

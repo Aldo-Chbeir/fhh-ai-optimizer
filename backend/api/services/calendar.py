@@ -222,32 +222,55 @@ async def _query_past_maintenance(pool: asyncpg.Pool, start: date, end: date) ->
 
 
 async def _query_material_orders(pool: asyncpg.Pool, start: date, end: date) -> list[dict]:
+    """Each material_orders row emits up to TWO feed items: a 'placed' event
+    on order_date and an 'arrives' event on expected_arrival_date. Each
+    item is included only if its own date falls in [start, end] — but the
+    row qualifies for the SQL fetch if EITHER date is in range, so a
+    'placed' event still surfaces when the arrival is far outside the
+    window (and vice-versa). Both items carry both dates so the detail
+    modal can show the full timeline regardless of which one was clicked.
+    """
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT order_id, sku, market, quantity, unit, expected_arrival_date,
+            SELECT order_id, sku, market, quantity, unit,
+                   order_date, expected_arrival_date,
                    status, notes
             FROM material_orders
-            WHERE expected_arrival_date BETWEEN $1 AND $2
-            ORDER BY expected_arrival_date ASC
+            WHERE order_date BETWEEN $1 AND $2
+               OR expected_arrival_date BETWEEN $1 AND $2
+            ORDER BY order_date ASC
             LIMIT $3
             """,
             start, end, CAP,
         )
     out = []
     for r in rows:
-        out.append({
-            "source":   "material_order",
-            "id":       r["order_id"],
-            "date":     r["expected_arrival_date"].isoformat(),
-            "title":    f"Order: {r['sku']}",
-            "sku":      r["sku"],
-            "market":   r["market"],
-            "quantity": float(r["quantity"]),
-            "unit":     r["unit"],
-            "status":   r["status"],
-            "notes":    r["notes"],
-        })
+        common = {
+            "source":                "material_order",
+            "sku":                   r["sku"],
+            "market":                r["market"],
+            "quantity":              float(r["quantity"]),
+            "unit":                  r["unit"],
+            "status":                r["status"],
+            "notes":                 r["notes"],
+            "order_date":            r["order_date"].isoformat(),
+            "expected_arrival_date": r["expected_arrival_date"].isoformat(),
+        }
+        if start <= r["order_date"] <= end:
+            out.append({
+                **common,
+                "id":    f"{r['order_id']}:placed",
+                "date":  r["order_date"].isoformat(),
+                "title": f"Order placed: {r['sku']}",
+            })
+        if start <= r["expected_arrival_date"] <= end:
+            out.append({
+                **common,
+                "id":    f"{r['order_id']}:arrives",
+                "date":  r["expected_arrival_date"].isoformat(),
+                "title": f"Order arrives: {r['sku']}",
+            })
     return out
 
 
