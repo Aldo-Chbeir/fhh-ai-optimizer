@@ -10,11 +10,12 @@
 //   - parse JSON responses
 //   - throw a structured Error on HTTP >= 400 (with .status / .body / .endpoint)
 //   - throw a network-flagged Error on connection failure (.networkError = true)
-//   - abort after 15 s via AbortController
+//   - abort after 60 s via AbortController (chat with multi-tool replies
+//     can run 20+ s; other endpoints are sub-second so the ceiling is fine)
 
 (function () {
   const DEFAULT_BASE = "http://localhost:8000";
-  const TIMEOUT_MS = 15000;
+  const TIMEOUT_MS = 60000;
 
   function baseUrl() {
     return (window.API_BASE_URL || DEFAULT_BASE).replace(/\/$/, "");

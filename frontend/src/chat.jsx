@@ -215,9 +215,17 @@ function ChatSidebar({ context, collapsed, onToggleCollapse }) {
         timestamp: r.timestamp,
       }]);
     } catch (e) {
+      let content;
+      if (e.networkError && (e.message || "").includes("timed out")) {
+        content = "The assistant is taking longer than expected. Please try again.";
+      } else if (e.status >= 500) {
+        content = "The server hit an error. Please try again.";
+      } else {
+        content = "Sorry — chat is temporarily unavailable. Please try again.";
+      }
       setMessages((m) => [...m, {
         role: "assistant",
-        content: "Sorry — chat is temporarily unavailable. Please try again.",
+        content,
         data_sources_used: [],
         suggested_followups: [],
         timestamp: new Date().toISOString(),
