@@ -1,10 +1,15 @@
 // Top-level app shell. Two regions:
 //   - Left ~70%: routed main content (overview, machine_detail, alerts, demand_forecast)
 //   - Right ~30%: always-on ChatSidebar with current_page context
+//
+// Auth gate: at startup we read window.api.auth.getUser() from localStorage.
+// If absent OR the backend ever returns token_expired/invalid_token (which
+// fires the "fhh:auth:expired" event), we render <LoginScreen> instead of
+// the dashboard. Token + user are persisted across page reloads.
 
-const { useState: useStateApp } = React;
+const { useState: useStateApp, useEffect: useEffectApp } = React;
 
-function TopNav({ active, onNavigate, kpiSummary }) {
+function TopNav({ active, onNavigate, kpiSummary, currentUser, onLogout }) {
   const items = [
     { id: "overview", label: "Overview" },
     { id: "alerts", label: "Alerts" },
@@ -65,8 +70,33 @@ function TopNav({ active, onNavigate, kpiSummary }) {
           <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#A9B7D6" }}>
             <span style={{ color: "white", fontWeight: 600 }}>OEE {kpiSummary.fleet_avg_oee_percent.toFixed(1)}%</span>
           </div>
-          <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#1B3568", color: "white",
-            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 600 }}>OP</div>
+        </div>
+      )}
+
+      {currentUser && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: 18 }}>
+          <div style={{ width: 1, height: 18, background: "#1B3568" }} />
+          <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.15, alignItems: "flex-end" }}>
+            <span style={{ fontSize: 12.5, fontWeight: 600, color: "white" }}>
+              {currentUser.full_name || currentUser.email}
+            </span>
+            <span style={{ fontSize: 10, color: "#A9B7D6" }}>{currentUser.email}</span>
+          </div>
+          <span style={{
+            padding: "2px 8px", borderRadius: 999,
+            background: currentUser.role === "admin" ? "#1E40AF" : "#374151",
+            color: "white", fontSize: 10, fontWeight: 700,
+            letterSpacing: 0.5, textTransform: "uppercase",
+          }}>{currentUser.role}</span>
+          <button onClick={onLogout} title="Sign out" style={{
+            padding: "6px 10px", borderRadius: 6,
+            background: "transparent", color: "#A9B7D6",
+            border: "1px solid #1B3568", cursor: "pointer", fontFamily: "inherit",
+            fontSize: 11.5, fontWeight: 600,
+          }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "#1B3568"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "#A9B7D6"; e.currentTarget.style.background = "transparent"; }}
+          >Logout</button>
         </div>
       )}
     </header>
@@ -96,10 +126,40 @@ function App() {
   const [currentComponent, setCurrentComponent] = useStateApp(null);
   const [kpiSummary, setKpiSummary] = useStateApp(null);
   const [chatCollapsed, setChatCollapsed] = useStateApp(false);
+  // Hydrate from localStorage so a refreshed tab stays signed-in. Token
+  // validation happens implicitly on the next API call — if the JWT is
+  // expired, the global 401 handler clears state + fires fhh:auth:expired.
+  const [currentUser, setCurrentUser] = useStateApp(() => window.api.auth.getUser());
 
-  React.useEffect(() => {
-    window.api.get("/kpis/overview").then(setKpiSummary);
+  // Listen for backend-driven session expiry. The api_client dispatches
+  // this event when any request returns token_expired / invalid_token.
+  useEffectApp(() => {
+    function onExpired() { setCurrentUser(null); }
+    window.addEventListener("fhh:auth:expired", onExpired);
+    return () => window.removeEventListener("fhh:auth:expired", onExpired);
   }, []);
+
+  // Only fetch screen data once the user is authenticated. Without this
+  // gate, /kpis/overview would fire with no token on first render, the
+  // backend would 401, and the response would slot into the dashboard
+  // *behind* the login screen.
+  useEffectApp(() => {
+    if (!currentUser) { setKpiSummary(null); return; }
+    window.api.get("/kpis/overview").then(setKpiSummary).catch(() => {});
+  }, [currentUser]);
+
+  function handleLogout() {
+    window.api.auth.logout();
+    setCurrentUser(null);
+    setKpiSummary(null);
+    setPage("overview");
+    setCurrentMachine(null);
+    setCurrentComponent(null);
+  }
+
+  if (!currentUser) {
+    return <LoginScreen onLoginSuccess={(u) => setCurrentUser(u)} />;
+  }
 
   const context = {
     current_page: page,
@@ -115,6 +175,8 @@ function App() {
         active={page === "machine_detail" ? "overview" : page}
         onNavigate={(p) => { setPage(p); setCurrentMachine(null); setCurrentComponent(null); }}
         kpiSummary={kpiSummary}
+        currentUser={currentUser}
+        onLogout={handleLogout}
       />
 
       <div style={{ flex: 1, minHeight: 0, display: "flex" }}>

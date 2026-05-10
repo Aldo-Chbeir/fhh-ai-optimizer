@@ -17,6 +17,12 @@
   const DEFAULT_BASE = "http://localhost:8000";
   const TIMEOUT_MS = 60000;
 
+  // localStorage keys for the JWT bearer token + cached user profile.
+  // Both are cleared by api.auth.logout() and by the global 401 handler
+  // when the backend returns token_expired / invalid_token.
+  const TOKEN_KEY = "fhh_jwt";
+  const USER_KEY = "fhh_user";
+
   function baseUrl() {
     return (window.API_BASE_URL || DEFAULT_BASE).replace(/\/$/, "");
   }
@@ -32,16 +38,54 @@
     return s ? "?" + s : "";
   }
 
+  // ─── auth helpers ────────────────────────────────────────────────────
+  // Synchronous wrappers around localStorage so screens can read without
+  // awaiting. Failures are silenced (incognito / disabled storage) so the
+  // app still renders the login form instead of crashing.
+  const auth = {
+    getToken() {
+      try { return localStorage.getItem(TOKEN_KEY); } catch (_) { return null; }
+    },
+    setToken(token) {
+      try { localStorage.setItem(TOKEN_KEY, token); } catch (_) { /* ignore */ }
+    },
+    clearToken() {
+      try { localStorage.removeItem(TOKEN_KEY); } catch (_) { /* ignore */ }
+    },
+    getUser() {
+      try {
+        const raw = localStorage.getItem(USER_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch (_) { return null; }
+    },
+    setUser(user) {
+      try { localStorage.setItem(USER_KEY, JSON.stringify(user)); } catch (_) { /* ignore */ }
+    },
+    clearUser() {
+      try { localStorage.removeItem(USER_KEY); } catch (_) { /* ignore */ }
+    },
+    logout() {
+      auth.clearToken();
+      auth.clearUser();
+    },
+  };
+
   async function fetchJson(method, path, { params, body, headers } = {}) {
     const url = baseUrl() + path + buildQuery(params);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
 
+    // Attach Authorization automatically when we have a token. Endpoints
+    // that don't require auth (/auth/login, the bootstrap /auth/register,
+    // /health) simply ignore the header on the backend, so unconditional
+    // attachment is safe and keeps this layer dumb.
+    const token = auth.getToken();
     const init = {
       method,
       headers: {
         "Accept": "application/json",
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(token ? { "Authorization": `Bearer ${token}` } : {}),
         ...(headers || {}),
       },
       signal: ctrl.signal,
@@ -72,6 +116,17 @@
     }
 
     if (!resp.ok) {
+      // Global session-expiry handling: if the backend tells us the token
+      // is expired or invalid, blow away local auth state and let the app
+      // shell react via the "fhh:auth:expired" event. We deliberately do
+      // NOT react to invalid_credentials / auth_required — those are
+      // expected on the login form itself and the user is already there.
+      const code = parsed && parsed.error && parsed.error.code;
+      if (resp.status === 401 && (code === "token_expired" || code === "invalid_token")) {
+        auth.logout();
+        try { window.dispatchEvent(new CustomEvent("fhh:auth:expired")); } catch (_) { /* ignore */ }
+      }
+
       const err = new Error(
         `${method} ${path} failed (${resp.status}): ${
           (parsed && parsed.error && parsed.error.message) ||
@@ -120,6 +175,7 @@
       };
       return fetchJson("POST", "/chat", { body });
     },
+    auth,
   };
 
   // Light log so it's obvious in DevTools that the live client is wired
