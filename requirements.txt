@@ -16,3 +16,9 @@ pandas>=2.1
 
 # Demand forecasting
 prophet>=1.1.5
+
+# Auth (/auth/* — bcrypt password hashing + JWT bearer tokens)
+bcrypt>=4.1.0
+pyjwt>=2.8.0
+email-validator>=2.1.0
+python-multipart>=0.0.9

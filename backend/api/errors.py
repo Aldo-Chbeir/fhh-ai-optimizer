@@ -109,6 +109,58 @@ class InvalidRequest(APIError):
     status_code = 400
 
 
+# ---- Auth (see backend/api/auth) -------------------------------------------
+
+class AuthRequired(APIError):
+    code = "auth_required"
+    status_code = 401
+
+    def __init__(self) -> None:
+        super().__init__("Authentication required.")
+
+
+class InvalidCredentials(APIError):
+    code = "invalid_credentials"
+    status_code = 401
+
+    def __init__(self) -> None:
+        # Single shared message — used for both bad password and unknown
+        # email so /auth/login can't be used for account enumeration.
+        super().__init__("Email or password is incorrect.")
+
+
+class InvalidToken(APIError):
+    code = "invalid_token"
+    status_code = 401
+
+    def __init__(self, message: str = "Token is invalid.") -> None:
+        super().__init__(message)
+
+
+class TokenExpired(APIError):
+    code = "token_expired"
+    status_code = 401
+
+    def __init__(self) -> None:
+        super().__init__("Access token has expired — please sign in again.")
+
+
+class Forbidden(APIError):
+    code = "forbidden"
+    status_code = 403
+
+    def __init__(self, message: str = "You don't have permission to perform this action.") -> None:
+        super().__init__(message)
+
+
+class EmailAlreadyExists(APIError):
+    code = "email_already_exists"
+    status_code = 409
+
+    def __init__(self, email: str) -> None:
+        super().__init__(f"An account already exists for '{email}'.")
+
+
 def _err(code: str, message: str, status_: int) -> JSONResponse:
     return JSONResponse(
         status_code=status_,

@@ -34,6 +34,7 @@ from .routers import (
     risk as risk_router,
     sensors as sensors_router,
 )
+from .auth.router import router as auth_router
 
 
 configure_logging("INFO")
@@ -149,6 +150,7 @@ app.include_router(kpis_router.router)
 app.include_router(admin_router.router)
 app.include_router(material_orders_router.router)
 app.include_router(calendar_router.router)
+app.include_router(auth_router)
 
 
 @app.get("/", include_in_schema=False)
