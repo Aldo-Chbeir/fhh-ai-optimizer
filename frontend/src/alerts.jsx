@@ -17,10 +17,15 @@ const { useState: useStateAlerts, useEffect: useEffectAlerts, useMemo: useMemoAl
 try { localStorage.removeItem("fhh_alert_overrides"); } catch (_) {}
 
 // ───────────── meta tables ─────────────
+// Indexed by the LIVE 4-value `tier` field on each alert (computed from the
+// current ML risk score, not the seeded alarm severity). `info` is kept
+// here for backward-compat — it's still the legacy alarm severity that we
+// surface in tooltips ("Originally fired as: info") and never as a tier.
 const SEV_META = {
   critical: { label: "Critical", fg: "#B31E2B", bg: "#FCE3E5", dot: "#D7263D", border: "#F0B5BB" },
   warning:  { label: "Warning",  fg: "#B14A00", bg: "#FFEDDD", dot: "#E66A12", border: "#FFD4A8" },
-  watch:    { label: "Watch",    fg: "#9A7700", bg: "#FFF6D6", dot: "#E2B400", border: "#F2DC95" },
+  watch:    { label: "Watch",    fg: "#4B5563", bg: "#EEF1F6", dot: "#6B7280", border: "#D8DEE8" },
+  healthy:  { label: "Healthy",  fg: "#0F8B5C", bg: "#E6F6EE", dot: "#15A56C", border: "#B7E2C7" },
   info:     { label: "Info",     fg: "#1F4FB1", bg: "#E5EDFB", dot: "#3D6FD9", border: "#C9D6F2" },
 };
 const STATUS_META = {
@@ -434,15 +439,42 @@ function OverflowMenu({ alert, onAct }) {
   );
 }
 
-function AlertCard({ alert, onOpenMachine, onAck, onSchedule, onSnooze, onResolve, onAddNote, bulkMode, checked, onToggleCheck }) {
-  const sevMeta = SEV_META[alert.severity];
+function AlertCard({ alert, onOpenMachine, onAck, onSchedule, onSnooze, onResolve, onAddNote, bulkMode, checked, onToggleCheck, isExpanded, onToggleExpand }) {
+  // Badge reflects the LIVE risk-score tier, not the seeded alarm severity.
+  // Fall back to severity for older payloads / mock data that don't carry
+  // tier yet (e.g. the optimistic-update path) so nothing renders blank.
+  const liveTier = alert.tier || alert.severity || "healthy";
+  const sevMeta = SEV_META[liveTier] || SEV_META.healthy;
+  // When the live tier disagrees with how the alarm originally fired, the
+  // tooltip surfaces the original severity so the operator isn't confused
+  // by "Speed setpoint reached" being tagged CRITICAL — the description
+  // is from the historical alarm, the tier is the model's current view.
+  const originalSev = alert.original_severity || alert.severity;
+  const tierMismatch = originalSev && originalSev !== liveTier;
+  const badgeTitle = tierMismatch
+    ? `Originally fired as: ${originalSev}`
+    : undefined;
   // _status is set by optimistic mutations; status comes from the server.
   // Backend-loaded alerts only have `status` (the Pydantic model strips
   // `_status`), so we need both fallbacks or every server-loaded alert
   // renders as "active" regardless of its real triage state.
   const status = alert._status || alert.status || "active";
   const dim = status === "acknowledged" || status === "resolved" || status === "snoozed";
-  const isHot = alert.severity === "critical" || alert.severity === "warning";
+  const isHot = liveTier === "critical" || liveTier === "warning";
+  // ML-only detection: tier is critical/warning but every underlying alarm
+  // event in the bucket fired as plain `info` (status messages, recoveries).
+  // The model sees risk that the DCS alarm log doesn't reflect — the
+  // headline should say so, with the original description preserved as a
+  // smaller subline + still in the expanded panel for audit.
+  const mlOnlyDetection = (
+    (liveTier === "critical" || liveTier === "warning") &&
+    Array.isArray(alert.underlying_events) &&
+    alert.underlying_events.length > 0 &&
+    alert.underlying_events.every((u) => u.severity === "info")
+  );
+  const headlineTitle = mlOnlyDetection
+    ? "ML detected risk — no DCS alarm fired"
+    : alert.title;
   return (
     <div
       onClick={(e) => {
@@ -454,7 +486,7 @@ function AlertCard({ alert, onOpenMachine, onAck, onSchedule, onSnooze, onResolv
       style={{
         background: "white",
         border: "1px solid #E5E8EE",
-        borderLeft: alert.severity === "critical" ? `4px solid ${sevMeta.dot}`
+        borderLeft: liveTier === "critical" ? `4px solid ${sevMeta.dot}`
                   : `1px solid #E5E8EE`,
         borderRadius: 10,
         padding: "16px 18px",
@@ -491,11 +523,12 @@ function AlertCard({ alert, onOpenMachine, onAck, onSchedule, onSnooze, onResolv
 
       {/* LEFT: severity + score + trend */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
-        <span style={{
+        <span title={badgeTitle} style={{
           display: "inline-flex", alignItems: "center", gap: 5,
           padding: "3px 8px", borderRadius: 999,
           background: sevMeta.bg, color: sevMeta.fg,
           fontSize: 10.5, fontWeight: 700, letterSpacing: 0.3, textTransform: "uppercase",
+          cursor: tierMismatch ? "help" : "default",
         }}>
           <span style={{ width: 6, height: 6, borderRadius: "50%", background: sevMeta.dot }} />
           {sevMeta.label}
@@ -515,19 +548,88 @@ function AlertCard({ alert, onOpenMachine, onAck, onSchedule, onSnooze, onResolv
       {/* MIDDLE: headline + sub + tags + impact */}
       <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ fontSize: 14, fontWeight: 600, color: "#0A1F44", lineHeight: 1.35,
-          textWrap: "balance" }}>
-          {MACHINE_NAMES[alert.machine_id]} · {COMPONENT_LABEL_ALERTS[alert.component_id]} · {alert.title}
+          textWrap: "balance", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            {MACHINE_NAMES[alert.machine_id]} · {COMPONENT_LABEL_ALERTS[alert.component_id]} · {headlineTitle}
+          </span>
+          {alert.event_count > 1 && onToggleExpand && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onToggleExpand(); }}
+              title={isExpanded ? "Hide underlying events" : "Show underlying events"}
+              style={{
+                flexShrink: 0,
+                padding: "2px 8px", borderRadius: 999,
+                border: "1px solid #DCE2EC", background: "white",
+                color: "#0A1F44", cursor: "pointer", fontFamily: "inherit",
+                fontSize: 11, fontWeight: 700, lineHeight: 1.2,
+              }}
+            >
+              {isExpanded ? "▾" : "▸"} {alert.event_count}
+            </button>
+          )}
         </div>
-        <div style={{ fontSize: 12.5, color: "#6B7280", lineHeight: 1.45, textWrap: "pretty" }}>
-          {alert.description}
-        </div>
+        {mlOnlyDetection ? (
+          // Subline preserves the original DCS log line so the audit trail
+          // is intact even though the headline is overridden. Smaller +
+          // dimmed so it reads as supporting context, not the main signal.
+          <div style={{ fontSize: 11.5, color: "#9CA3AF", lineHeight: 1.45, fontStyle: "italic" }}>
+            DCS log: {alert.title}
+          </div>
+        ) : (
+          <div style={{ fontSize: 12.5, color: "#6B7280", lineHeight: 1.45, textWrap: "pretty" }}>
+            {alert.description}
+          </div>
+        )}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 2 }}>
           <Pill>{MACHINE_NAMES[alert.machine_id]}</Pill>
           <Pill>{COMPONENT_LABEL_ALERTS[alert.component_id]}</Pill>
           {alert.top_contributing_sensors?.[0] && (
             <Pill>{alert.top_contributing_sensors[0].sensor_type}</Pill>
           )}
+          {alert.is_informational && (
+            <Pill>Informational</Pill>
+          )}
         </div>
+        {alert.event_count > 1 && (
+          <div style={{ fontSize: 11.5, color: "#6B7280", marginTop: 2 }}>
+            First seen {formatRelative(alert.first_triggered_at || alert.created_at)}
+            {" · "}
+            Latest {formatRelative(alert.latest_triggered_at || alert.created_at)}
+            {" · "}
+            <span style={{ fontWeight: 600 }}>{alert.event_count} events</span>
+          </div>
+        )}
+        {isExpanded && alert.underlying_events && alert.underlying_events.length > 0 && (
+          <div style={{
+            marginTop: 6, paddingTop: 8, borderTop: "1px dashed #DCE2EC",
+            display: "flex", flexDirection: "column", gap: 4,
+          }}>
+            {alert.underlying_events.map((u) => (
+              <div key={u.alarm_id} style={{
+                display: "flex", gap: 10, alignItems: "baseline",
+                fontSize: 11.5, color: "#4B5563",
+              }}>
+                <span style={{
+                  flexShrink: 0,
+                  width: 56,
+                  fontSize: 9.5, fontWeight: 700,
+                  letterSpacing: 0.4, textTransform: "uppercase",
+                  color: SEV_META[u.severity]?.fg || "#6B7280",
+                }}>{u.severity}</span>
+                <span style={{
+                  flexShrink: 0, color: "#9CA3AF",
+                  fontVariantNumeric: "tabular-nums", fontSize: 11,
+                }}>{formatRelative(u.timestamp)}</span>
+                <span style={{
+                  flex: 1, minWidth: 0,
+                  fontStyle: u.is_informational ? "italic" : "normal",
+                  color: u.is_informational ? "#9CA3AF" : "#374151",
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                }} title={u.description}>{u.description}</span>
+              </div>
+            ))}
+          </div>
+        )}
         {(alert.predicted_failure_window_hours || alert.estimated_cost_if_unaddressed_usd) && isHot && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 4 }}>
             {alert.predicted_failure_window_hours != null && (
@@ -535,7 +637,7 @@ function AlertCard({ alert, onOpenMachine, onAck, onSchedule, onSnooze, onResolv
                 ⏱ Predicted failure ~{alert.predicted_failure_window_hours}h
               </div>
             )}
-            {alert.severity === "critical" && alert.estimated_cost_if_unaddressed_usd != null && (
+            {liveTier === "critical" && alert.estimated_cost_if_unaddressed_usd != null && (
               <div style={{ fontSize: 12, color: "#B31E2B", fontWeight: 600 }}>
                 💰 Est. impact if unaddressed: {formatUsdCompact(alert.estimated_cost_if_unaddressed_usd)}
               </div>
@@ -562,8 +664,10 @@ function AlertCard({ alert, onOpenMachine, onAck, onSchedule, onSnooze, onResolv
 
       {/* RIGHT: timestamp + status pill + actions */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
-        <div title={alert.created_at} style={{ fontSize: 11, color: "#9CA3AF", fontVariantNumeric: "tabular-nums" }}>
-          Triggered {formatRelative(alert.created_at)}
+        <div title={alert.latest_triggered_at || alert.created_at}
+             style={{ fontSize: 11, color: "#9CA3AF", fontVariantNumeric: "tabular-nums" }}>
+          {alert.event_count > 1 ? "Latest" : "Triggered"}{" "}
+          {formatRelative(alert.latest_triggered_at || alert.created_at)}
         </div>
         <StatusPill status={status} alert={alert} />
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6, width: "100%" }}>
@@ -788,7 +892,11 @@ function EmptyState({ onClear }) {
 function AlertsScreen({ onOpenMachine }) {
   const [kpis, setKpis] = useStateAlerts(null);
   const [allAlerts, setAllAlerts] = useStateAlerts(null);
-  const [tab, setTab] = useStateAlerts("active");
+  // Default to "All" so the page surfaces every state — including
+  // critical groups currently parked in `scheduled` (e.g. the demo's
+  // Al Nakheel · Yankee row) which would otherwise be hidden behind the
+  // Active tab. Operators can still pivot to Active for triage focus.
+  const [tab, setTab] = useStateAlerts("all");
   const [search, setSearch] = useStateAlerts("");
   const [machineFilter, setMachineFilter] = useStateAlerts([]);
   const [sevFilter, setSevFilter] = useStateAlerts([]);
@@ -799,17 +907,46 @@ function AlertsScreen({ onOpenMachine }) {
   const [scheduleFor, setScheduleFor] = useStateAlerts(null);
   const [noteFor, setNoteFor] = useStateAlerts(null);
   const [toast, setToast] = useStateAlerts(null);
+  // Hide informational rows by default (Phase F2). Toggle in the toolbar
+  // shows "Show informational (N hidden)" with the live hidden-count.
+  const [showInformational, setShowInformational] = useStateAlerts(false);
+  // Per-row expand state for grouped rows. Map<alert_id, bool>.
+  const [expanded, setExpanded] = useStateAlerts({});
+
+  function toggleExpanded(id) {
+    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
 
   // The "include_resolved=true" flag pulls every triage state from the
   // server (active / acknowledged / scheduled / snoozed / resolved) so
   // every tab in the screen header has data without a separate fetch.
+  //
+  // group_by=component buckets multi-event component rows into single
+  // grouped rows with `event_count`, `first_triggered_at`,
+  // `latest_triggered_at`, and `underlying_events` for the expand toggle.
+  //
+  // KPIs (sparklines + active counters at the top of the page) get a
+  // machine_id query param when a single machine is selected so the
+  // strip pivots together with the tab counts. Multiple machines or no
+  // filter both fall through to fleet-wide.
   function refetchAlerts() {
-    window.api.get("/alerts/kpis").then(setKpis);
+    const kpiParams = (machineFilter.length === 1) ? { machine_id: machineFilter[0] } : null;
+    window.api.get("/alerts/kpis", kpiParams || undefined).then(setKpis);
     window.api
-      .get("/alerts", { sort: "created_at", include_resolved: "true" })
+      .get("/alerts", {
+        sort: "created_at", include_resolved: "true",
+        group_by: "component",
+      })
       .then((r) => setAllAlerts(r.alerts));
   }
   useEffectAlerts(() => { refetchAlerts(); }, []);
+  // Re-fetch KPIs whenever the machine filter changes so the strip
+  // re-pivots. The /alerts list itself is fetched once and re-filtered
+  // client-side (it already carries every triage state on every row).
+  useEffectAlerts(() => {
+    const kpiParams = (machineFilter.length === 1) ? { machine_id: machineFilter[0] } : null;
+    window.api.get("/alerts/kpis", kpiParams || undefined).then(setKpis).catch(() => {});
+  }, [machineFilter.join(",")]);
 
   function showToast(msg) {
     setToast(msg);
@@ -955,25 +1092,42 @@ function AlertsScreen({ onOpenMachine }) {
   // (`_status` / `status`); no client-side override layer needed.
   const merged = allAlerts || [];
 
-  // Tab counts pivot off the same persisted statuses. Per-status totals
-  // also come back on /alerts/kpis (kpis.counts_by_status), but computing
-  // them locally keeps the badge in sync with the optimistic state during
-  // the moment between PATCH and KPI refetch.
+  // Tab counts pivot off the same persisted statuses but MUST respect the
+  // machine + component filters — otherwise the strip says "Active 3,
+  // Scheduled 1, Resolved 18" identical for every machine pick, which
+  // operators rightly read as broken. The informational toggle is NOT
+  // applied here on purpose: the tab strip is a status pivot, not a
+  // visibility pivot, and hiding informational rows from a count would
+  // hide work that the operator can opt in to see.
+  const tabScoped = useMemoAlerts(() => {
+    let list = merged;
+    if (machineFilter.length) list = list.filter((a) => machineFilter.includes(a.machine_id));
+    if (compFilter.length)    list = list.filter((a) => compFilter.includes(a.component_id));
+    return list;
+  }, [merged, machineFilter, compFilter]);
+
   const counts = useMemoAlerts(() => {
-    const c = { active: 0, acknowledged: 0, snoozed: 0, scheduled: 0, resolved: 0, all: merged.length };
-    merged.forEach((a) => {
+    const c = { active: 0, acknowledged: 0, snoozed: 0, scheduled: 0, resolved: 0, all: tabScoped.length };
+    tabScoped.forEach((a) => {
       const s = a._status || a.status || "active";
       if (c[s] != null) c[s]++;
     });
     return c;
-  }, [merged]);
+  }, [tabScoped]);
 
   // apply tab + filters + search + sort
   const visible = useMemoAlerts(() => {
     let list = merged;
     if (tab !== "all") list = list.filter((a) => (a._status || a.status || "active") === tab);
     if (machineFilter.length) list = list.filter((a) => machineFilter.includes(a.machine_id));
-    if (sevFilter.length)     list = list.filter((a) => sevFilter.includes(a.severity));
+    // Filter chips key off the LIVE tier (not the seeded alarm severity)
+    // so "Critical" matches anything the model currently scores 70+, even
+    // if it fired originally as info.
+    if (sevFilter.length)     list = list.filter((a) => sevFilter.includes(a.tier || a.severity));
+    // Suppress benign "everything's fine" rows unless the operator opts in.
+    // The backend flag is set only when ALL events in a grouped row are
+    // status-message-style descriptions AND the live tier is healthy.
+    if (!showInformational)   list = list.filter((a) => !a.is_informational);
     if (compFilter.length)    list = list.filter((a) => compFilter.includes(a.component_id));
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -989,13 +1143,32 @@ function AlertsScreen({ onOpenMachine }) {
       created_at_desc: (a, b) => b.created_at.localeCompare(a.created_at),
       created_at_asc:  (a, b) => a.created_at.localeCompare(b.created_at),
       severity:        (a, b) => {
-        const order = { critical: 0, warning: 1, watch: 2, info: 3 };
-        return (order[a.severity] - order[b.severity]) || (b.risk_score - a.risk_score);
+        // Sort by live tier (4 buckets); fall back to legacy severity for
+        // older payloads. Tie-break on risk_score so a 79 and a 95 in the
+        // same critical bucket render in the obvious order.
+        const order = { critical: 0, warning: 1, watch: 2, healthy: 3, info: 4 };
+        const at = a.tier || a.severity;
+        const bt = b.tier || b.severity;
+        return (order[at] ?? 9) - (order[bt] ?? 9) || (b.risk_score - a.risk_score);
       },
       machine:         (a, b) => MACHINE_NAMES[a.machine_id].localeCompare(MACHINE_NAMES[b.machine_id]),
     };
     return list.slice().sort(sorters[sort] || sorters.created_at_desc);
-  }, [merged, tab, machineFilter, sevFilter, compFilter, search, sort]);
+  }, [merged, tab, machineFilter, sevFilter, compFilter, search, sort, showInformational]);
+
+  // Count rows currently suppressed by the informational toggle — scoped
+  // to the same filter pipeline the visible list uses (tab / machine /
+  // component / search), so the "(N hidden)" badge always tells the
+  // truth about what's missing from THIS view, not from the fleet.
+  const hiddenInformationalCount = React.useMemo(() => {
+    if (showInformational) return 0;
+    let list = merged;
+    if (tab !== "all") list = list.filter((a) => (a._status || a.status || "active") === tab);
+    if (machineFilter.length) list = list.filter((a) => machineFilter.includes(a.machine_id));
+    if (compFilter.length)    list = list.filter((a) => compFilter.includes(a.component_id));
+    if (sevFilter.length)     list = list.filter((a) => sevFilter.includes(a.tier || a.severity));
+    return list.filter((a) => a.is_informational).length;
+  }, [merged, tab, machineFilter, compFilter, sevFilter, showInformational]);
 
   const anyFilter = machineFilter.length + sevFilter.length + compFilter.length > 0 || search.trim();
   function clearFilters() {
@@ -1003,11 +1176,15 @@ function AlertsScreen({ onOpenMachine }) {
   }
 
   const machineOpts = Object.entries(MACHINE_NAMES).map(([id, label]) => ({ id, label }));
+  // Filter chips list the four LIVE tiers. `info` is the legacy alarm
+  // severity and never appears as a `tier` value, so it's intentionally
+  // dropped from the chip set even though SEV_META still defines it for
+  // tooltip rendering ("Originally fired as: info").
   const sevOpts = [
     { id: "critical", label: "Critical" },
     { id: "warning",  label: "Warning" },
     { id: "watch",    label: "Watch" },
-    { id: "info",     label: "Info" },
+    { id: "healthy",  label: "Healthy" },
   ];
   const compOpts = Object.entries(COMPONENT_LABEL_ALERTS).map(([id, label]) => ({ id, label }));
 
@@ -1062,6 +1239,27 @@ function AlertsScreen({ onOpenMachine }) {
           <FilterChip label="Machine"   options={machineOpts} selected={machineFilter} onChange={setMachineFilter} />
           <FilterChip label="Severity"  options={sevOpts}     selected={sevFilter}     onChange={setSevFilter} />
           <FilterChip label="Component" options={compOpts}    selected={compFilter}    onChange={setCompFilter} />
+          {/* Informational toggle — visible whenever there's something to
+              toggle in the current filter scope (or the user has opted to
+              show them). Renders across all tabs since informational rows
+              can land in active/acknowledged/scheduled/etc. */}
+          {(showInformational || hiddenInformationalCount > 0) && (
+            <button
+              onClick={() => setShowInformational((v) => !v)}
+              title="Status-message rows (e.g. 'within band', 'stable') are hidden by default. Toggle to include them."
+              style={{
+                padding: "7px 12px", borderRadius: 8,
+                border: showInformational ? "1px solid #0F8B5C" : "1px dashed #B0B8C8",
+                background: showInformational ? "#E6F6EE" : "white",
+                color: showInformational ? "#0F8B5C" : "#6B7280",
+                fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+              }}
+            >
+              {showInformational
+                ? "✓ Showing informational"
+                : `Show informational (${hiddenInformationalCount} hidden)`}
+            </button>
+          )}
           <div style={{ flex: 1 }} />
           <SortMenu value={sort} onChange={setSort} />
           <button
@@ -1130,6 +1328,8 @@ function AlertsScreen({ onOpenMachine }) {
             onSnooze={() => snooze(a)}
             onResolve={() => resolve(a)}
             onAddNote={() => setNoteFor(a)}
+            isExpanded={!!expanded[a.alert_id]}
+            onToggleExpand={() => toggleExpanded(a.alert_id)}
           />
         ))}
       </div>

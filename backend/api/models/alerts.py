@@ -16,11 +16,39 @@ class AlertStatus(str, Enum):
     RESOLVED     = "resolved"
 
 
+class UnderlyingAlertEvent(BaseModel):
+    """One row from a grouped alert — the items the expand toggle on a
+    grouped Alert renders inline. Only populated when GET /alerts is
+    called with `group_by=component`."""
+    alarm_id: str
+    alert_id: str
+    description: str
+    severity: AlarmSeverity
+    tier: Literal["healthy", "watch", "warning", "critical"]
+    timestamp: Optional[str] = None
+    is_informational: bool = False
+
+
 class Alert(BaseModel):
     alert_id: str
     machine_id: str
     component_id: str
+    # `severity` reflects the alarm's original 3-value classification
+    # (info / warning / critical) baked into alarm_events at seed time —
+    # kept for audit and any external consumer that still reads it.
+    # `tier` is the live 4-value bucket derived from the current ML risk
+    # score and is what the UI badge displays. The two can disagree
+    # (alarm fired as 'info' months ago, model now says 'critical')
+    # — `original_severity` is an alias of `severity` named for clarity
+    # in tooltips like "Originally fired as: info".
     severity: AlarmSeverity
+    tier: Literal["healthy", "watch", "warning", "critical"] = "healthy"
+    original_severity: Optional[str] = None
+    # True when the description matches a benign-status pattern AND the
+    # tier is `healthy`. Frontend hides these by default behind a "Show
+    # informational (N hidden)" toggle so the active triage queue shows
+    # only signals worth acting on.
+    is_informational: bool = False
     risk_score: int = Field(ge=0, le=100)
     title: str
     description: str
@@ -33,6 +61,15 @@ class Alert(BaseModel):
     status_changed_at: Optional[str] = None
     status_changed_by: Optional[str] = None
     status_metadata: dict = Field(default_factory=dict)
+    # ----- group_by=component additions -----------------------------------
+    # All five fields are unset on the per-row default response and
+    # populated only when `?group_by=component` aggregates events. None
+    # of them break the existing contract — additive only.
+    first_triggered_at: Optional[str] = None
+    latest_triggered_at: Optional[str] = None
+    event_count: Optional[int] = None
+    alarm_ids: Optional[list[str]] = None
+    underlying_events: Optional[list[UnderlyingAlertEvent]] = None
 
 
 # ---------------------------------------------------------------------------

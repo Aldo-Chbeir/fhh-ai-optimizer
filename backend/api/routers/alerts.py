@@ -15,7 +15,9 @@ from ..models import (
     AlertStatus, AlertStatusUpdate,
     AcknowledgeBody, ScheduleBody, SnoozeBody, ResolveBody,
 )
-from ..services.alerts import list_alerts, get_alert, set_alert_status
+from ..services.alerts import (
+    get_alert, group_alerts_by_component, list_alerts, set_alert_status,
+)
 from ..services.constants import VALID_MACHINE_IDS
 
 router = APIRouter(tags=["maintenance"])
@@ -42,6 +44,14 @@ async def get_alerts(
         False,
         description="When no `status` filter is set, also include resolved alerts.",
     ),
+    group_by: Optional[str] = Query(
+        None,
+        description="Aggregate events. Only 'component' is supported — buckets "
+                    "by (machine_id, component_id) and emits one row per bucket "
+                    "with first/latest timestamps, event_count, and "
+                    "underlying_events for the expand toggle. Default (unset) "
+                    "returns one row per alarm, contract-compatible.",
+    ),
     conn: asyncpg.Connection = Depends(get_conn),
 ) -> AlertList:
     if machine_id is not None and machine_id not in VALID_MACHINE_IDS:
@@ -55,6 +65,11 @@ async def get_alerts(
         sort=sort.value,
         include_resolved=include_resolved,
     )
+    # Group BEFORE limit so the limit applies to grouped rows when grouping
+    # is active. counts_by_tier stays on the ungrouped per-event list — the
+    # KPI strip is "alarms by tier", not "machines by tier".
+    if group_by == "component":
+        alerts = group_alerts_by_component(alerts)
     if limit is not None:
         alerts = alerts[:limit]
     return AlertList(
@@ -196,25 +211,44 @@ async def patch_alert_resolve(
 
 @router.get("/alerts/kpis", response_model=AlertsKPIs)
 async def get_alerts_kpis(
+    machine_id: Optional[str] = Query(
+        None,
+        description="Scope every counter / sparkline / counts_by_status to "
+                    "this machine. Without it, all values are fleet-wide.",
+    ),
     conn: asyncpg.Connection = Depends(get_conn),
 ) -> AlertsKPIs:
     """UI extension — aggregate counters + 7-day sparklines for the
     Alerts triage screen header. Not part of API_CONTRACT.md v1.1."""
+    if machine_id is not None and machine_id not in VALID_MACHINE_IDS:
+        raise MachineNotFound(machine_id)
+
+    # Build the WHERE-clause fragment + parameter list once, reuse across
+    # every query. When machine_id is None, `mc` is the empty string and
+    # `mc_params` is empty so the SQL stays fleet-wide as before.
+    mc = " AND machine_id = $1" if machine_id else ""
+    mc_params: list = [machine_id] if machine_id else []
+
     # Active critical / warning counts. "Active" now means status='active'
     # (still pre-triage); rows the operator has acknowledged / scheduled /
     # snoozed are no longer in this count.
     crit_active = await conn.fetchval(
-        "SELECT COUNT(*) FROM alarm_events "
-        "WHERE severity='critical' AND status='active'"
+        f"SELECT COUNT(*) FROM alarm_events "
+        f"WHERE severity='critical' AND status='active'{mc}",
+        *mc_params,
     ) or 0
     warn_active = await conn.fetchval(
-        "SELECT COUNT(*) FROM alarm_events "
-        "WHERE severity='warning' AND status='active'"
+        f"SELECT COUNT(*) FROM alarm_events "
+        f"WHERE severity='warning' AND status='active'{mc}",
+        *mc_params,
     ) or 0
 
-    # 7-day sparklines from alarm_events daily counts (newest day on the right)
+    # 7-day sparklines from alarm_events daily counts (newest day on the right).
+    # The machine filter goes on the LEFT JOIN clause so dates with no events
+    # for the filtered machine still appear with count=0.
+    spark_join_filter = " AND e.machine_id = $1" if machine_id else ""
     spark_rows = await conn.fetch(
-        """
+        f"""
         WITH days AS (
           SELECT generate_series(
             (SELECT date_trunc('day', MAX(timestamp)) FROM alarm_events) - INTERVAL '6 days',
@@ -227,17 +261,18 @@ async def get_alerts_kpis(
           COALESCE(SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END), 0) AS crit,
           COALESCE(SUM(CASE WHEN severity='warning'  THEN 1 ELSE 0 END), 0) AS warn
         FROM days
-        LEFT JOIN alarm_events e ON e.timestamp::date = d
+        LEFT JOIN alarm_events e ON e.timestamp::date = d{spark_join_filter}
         GROUP BY d
         ORDER BY d
-        """
+        """,
+        *mc_params,
     )
     crit_spark = [int(r["crit"]) for r in spark_rows] or [0] * 7
     warn_spark = [int(r["warn"]) for r in spark_rows] or [0] * 7
 
     # Avg response time = median minutes between alarm timestamp and resolved_at
     avg_resp = await conn.fetchval(
-        """
+        f"""
         SELECT COALESCE(
           ROUND(EXTRACT(EPOCH FROM AVG(resolved_at - timestamp)) / 60),
           0
@@ -245,10 +280,12 @@ async def get_alerts_kpis(
         FROM alarm_events
         WHERE resolved_at IS NOT NULL
           AND timestamp >= (SELECT MAX(timestamp) FROM alarm_events) - INTERVAL '7 days'
-        """
+          {mc}
+        """,
+        *mc_params,
     ) or 0
     avg_resp_prev = await conn.fetchval(
-        """
+        f"""
         SELECT COALESCE(
           ROUND(EXTRACT(EPOCH FROM AVG(resolved_at - timestamp)) / 60),
           0
@@ -257,23 +294,29 @@ async def get_alerts_kpis(
         WHERE resolved_at IS NOT NULL
           AND timestamp BETWEEN (SELECT MAX(timestamp) FROM alarm_events) - INTERVAL '14 days'
                             AND (SELECT MAX(timestamp) FROM alarm_events) - INTERVAL '7 days'
-        """
+          {mc}
+        """,
+        *mc_params,
     ) or 0
     delta = int(avg_resp) - int(avg_resp_prev)
 
     # Acknowledged-today counts (where resolved_at falls on the latest day)
     ack_today = await conn.fetchval(
-        """
+        f"""
         SELECT COUNT(*) FROM alarm_events
         WHERE resolved_at IS NOT NULL
           AND resolved_at::date = (SELECT MAX(timestamp)::date FROM alarm_events)
-        """
+          {mc}
+        """,
+        *mc_params,
     ) or 0
     ack_total = await conn.fetchval(
-        """
+        f"""
         SELECT COUNT(*) FROM alarm_events
         WHERE timestamp::date = (SELECT MAX(timestamp)::date FROM alarm_events)
-        """
+          {mc}
+        """,
+        *mc_params,
     ) or 0
 
     last_updated = await conn.fetchval(
@@ -288,8 +331,13 @@ async def get_alerts_kpis(
 
     # Per-status counts so the UI tabs (Active / Acknowledged / Scheduled /
     # Snoozed / Resolved) reflect real DB state rather than localStorage.
+    # When machine_id is set, the tab strip on the Alerts screen wants
+    # the counts scoped to that machine — that's the whole point of the
+    # machine filter applying to tabs.
+    where_clause = "WHERE machine_id = $1" if machine_id else ""
     status_rows = await conn.fetch(
-        "SELECT status, COUNT(*) AS n FROM alarm_events GROUP BY status"
+        f"SELECT status, COUNT(*) AS n FROM alarm_events {where_clause} GROUP BY status",
+        *mc_params,
     )
     counts_by_status = {row["status"]: int(row["n"]) for row in status_rows}
     for s in ("active", "acknowledged", "scheduled", "snoozed", "resolved"):

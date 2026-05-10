@@ -65,6 +65,46 @@ _RECOMMENDED_BY_COMPONENT = {
 }
 
 
+# Descriptions matching any of these substrings are status updates the
+# operator doesn't need to triage ("everything's fine" pings). They stay
+# in the DB and in the response (so audits + counts are honest), just
+# flagged so the frontend can hide them behind a toggle. Matched
+# case-insensitively against the alarm description.
+INFORMATIONAL_PATTERNS = [
+    "within band",
+    "within range",
+    "stable",
+    "normal range",
+    "normal",
+    "recovered",
+    "setpoint reached",
+    "as expected",
+    "operating nominally",
+    "no fault detected",
+]
+
+
+def is_informational(description: str) -> bool:
+    """A description is informational if it matches one of the patterns
+    above. Returned independently of tier — the caller combines both
+    signals (only tier=healthy + informational counts as 'safe to hide')."""
+    if not description:
+        return False
+    desc_lower = description.lower()
+    return any(p in desc_lower for p in INFORMATIONAL_PATTERNS)
+
+
+# Tier ranking used to pick the "headline" alarm in a grouped row. Lower
+# index = more severe = wins. `info` here is the legacy alarm-severity
+# value (only used as a fallback when an alert dict somehow lacks `tier`).
+_TIER_RANK = {"critical": 0, "warning": 1, "watch": 2, "healthy": 3, "info": 4}
+
+# Original-alarm severity ranking — every event in a bucket has the same
+# `tier` (it's the component's live ML score), so to break the tie we
+# fall back to what the alarm originally fired as. critical > warning > info.
+_ORIG_SEV_RANK = {"critical": 0, "warning": 1, "info": 2}
+
+
 def _attribute_component(description: str) -> str:
     desc = (description or "").lower()
     for keyword, comp in _DESCRIPTION_KEYWORDS:
@@ -232,14 +272,30 @@ async def list_alerts(
     # Pass 3: build the alert payloads.
     alerts: list[dict] = []
     for r, comp, st in classified:
-        score, tier, window = risk_by_pair[(r["machine_id"], comp)]
+        score, _row_tier, window = risk_by_pair[(r["machine_id"], comp)]
+        # Compute the live 4-tier classification from the current ML score.
+        # The seeded `severity` column reflects what the alarm originally
+        # fired as (info / warning / critical) — kept for audit and as
+        # `original_severity` so the UI can surface "originally fired as
+        # info" when the model has since moved the row.
+        live_tier = tier_for(score)
         title_short = r["description"].split(".")[0][:120]
 
+        # An alert is "informational" when it both (a) reads as a benign
+        # status update AND (b) lives in a healthy component. A critical
+        # tier on a row whose description says "within band" is still
+        # critical — the model is telling us something the description
+        # doesn't.
+        info_flag = (live_tier == "healthy") and is_informational(r["description"])
         alert = {
             "alert_id": _alert_id_from_alarm(r["alarm_id"]),
             "machine_id": r["machine_id"],
             "component_id": comp,
-            "severity": r["severity"],
+            "severity": r["severity"],            # legacy 3-value (info/warning/critical)
+            "tier": live_tier,                    # live 4-value (healthy/watch/warning/critical)
+            "original_severity": r["severity"],   # alias of severity, named for clarity
+            "is_informational": info_flag,
+            "timestamp": r["timestamp"],          # kept for grouping aggregation; stripped from non-grouped responses
             "risk_score": score,
             "title": title_short or "Component alert",
             "description": r["description"],
@@ -273,9 +329,132 @@ async def list_alerts(
 
     counts: dict[str, int] = {"critical": 0, "warning": 0, "watch": 0, "healthy": 0}
     for a in alerts:
-        counts[tier_for(a["risk_score"])] += 1
+        counts[a["tier"]] += 1
 
     return alerts, counts
+
+
+# ---------------------------------------------------------------------------
+# Group-by-component aggregation (Phase F2)
+# ---------------------------------------------------------------------------
+
+def group_alerts_by_component(alerts: list[dict]) -> list[dict]:
+    """Bucket per-row alerts by (machine_id, component_id) and emit one
+    grouped row per bucket.
+
+    Aggregation rules:
+      - tier:        max-severity in the group (critical > warning > watch > healthy)
+      - title/desc:  taken from the highest-tier alarm in the group
+      - timestamps:  first_triggered_at = oldest, latest_triggered_at = newest
+      - is_informational: True only when EVERY event in the bucket is
+        informational. One real alarm in a 4-event bucket flips it to False.
+      - underlying_events: list of every event in the group (oldest-first)
+        so the frontend expand toggle can reveal them all.
+
+    The grouped rows preserve fields the AlertCard/badge needs (severity,
+    tier, original_severity, risk_score, recommended_action, cost, …)
+    sourced from the headline event so existing UI code still renders.
+    """
+    buckets: dict[tuple[str, str], list[dict]] = {}
+    for a in alerts:
+        key = (a["machine_id"], a["component_id"])
+        buckets.setdefault(key, []).append(a)
+
+    grouped: list[dict] = []
+    for (machine_id, component_id), events in buckets.items():
+        # Pick the "headline" event for the bucket. Every event here has
+        # the same `tier` (the component's live ML score), so the tier
+        # field alone collapses to newest-first — which is wrong, because
+        # the newest event is often a benign recovery message ("Stock
+        # temperature recovered to normal range") even on a critical
+        # group. Sort instead by:
+        #
+        #   1. is_informational ASC                    real alarms before info pings
+        #   2. description-matches-INFO-patterns ASC   push "recovered/within band/stable"
+        #                                              to the back even when the
+        #                                              info_flag was suppressed because
+        #                                              the component is critical-tier
+        #   3. _ORIG_SEV_RANK[original_severity] ASC   critical > warning > info
+        #   4. _TIER_RANK[tier] ASC                    no-op within a bucket; cheap tiebreak
+        #   5. timestamp DESC                          within the same severity, newest wins
+        def _head_key(e):
+            desc_is_info = is_informational(e.get("description", ""))
+            ts = e.get("timestamp")
+            ts_score = -(ts.timestamp()) if ts else 0
+            return (
+                1 if e.get("is_informational", False) else 0,
+                1 if desc_is_info else 0,
+                _ORIG_SEV_RANK.get(e.get("original_severity"), 9),
+                _TIER_RANK.get(e.get("tier"), 9),
+                ts_score,
+            )
+
+        events_by_severity = sorted(events, key=_head_key)
+        head = events_by_severity[0]
+
+        # Underlying-events list, oldest-first (chronological for the
+        # expand panel). Strip down to the fields the modal needs.
+        events_by_time = sorted(
+            events,
+            key=lambda e: (e["timestamp"].timestamp() if e.get("timestamp") else 0),
+        )
+        underlying = [
+            {
+                "alarm_id":         _alarm_id_from_alert(e["alert_id"]),
+                "alert_id":         e["alert_id"],
+                "description":      e["description"],
+                "severity":         e["severity"],
+                "tier":             e["tier"],
+                "timestamp":        _iso(e["timestamp"]) if e.get("timestamp") else None,
+                "is_informational": e.get("is_informational", False),
+            }
+            for e in events_by_time
+        ]
+
+        first_ts = events_by_time[0]["timestamp"]
+        latest_ts = events_by_time[-1]["timestamp"]
+
+        all_informational = all(e.get("is_informational", False) for e in events)
+
+        grouped.append({
+            "alert_id":          head["alert_id"],
+            "machine_id":        machine_id,
+            "component_id":      component_id,
+            # Surface the headline alarm's classification — the badge
+            # already reads `tier`, so this row renders correctly without
+            # any frontend-side max() logic.
+            "severity":          head["severity"],
+            "tier":              head["tier"],
+            "original_severity": head["original_severity"],
+            "risk_score":        head["risk_score"],
+            "title":             head["title"],
+            "description":       head["description"],
+            "predicted_failure_window_hours": head["predicted_failure_window_hours"],
+            "recommended_action":             head["recommended_action"],
+            "estimated_cost_if_unaddressed_usd": head["estimated_cost_if_unaddressed_usd"],
+            # Bucket-level aggregates
+            "first_triggered_at":  _iso(first_ts) if first_ts else None,
+            "latest_triggered_at": _iso(latest_ts) if latest_ts else None,
+            "event_count":         len(events),
+            "alarm_ids":           [u["alarm_id"] for u in underlying],
+            "underlying_events":   underlying,
+            "is_informational":    all_informational,
+            # Pass through status fields from the headline event so triage
+            # buttons (Acknowledge / Schedule) target the most-severe
+            # underlying alarm — that's the one the operator cares about.
+            "status":              head.get("status", "active"),
+            "status_changed_at":   head.get("status_changed_at"),
+            "status_changed_by":   head.get("status_changed_by"),
+            "status_metadata":     head.get("status_metadata") or {},
+            "_status":             head.get("_status"),
+            "acknowledged":        head.get("acknowledged", False),
+            "created_at":          _iso(first_ts) if first_ts else head.get("created_at"),
+        })
+
+    # Sort grouped rows the same way the per-row list was sorted by
+    # default — most-severe first, tie-broken by risk_score desc.
+    grouped.sort(key=lambda g: (_TIER_RANK.get(g["tier"], 9), -g["risk_score"]))
+    return grouped
 
 
 async def get_alert(conn: asyncpg.Connection, alert_id: str) -> Optional[dict]:
