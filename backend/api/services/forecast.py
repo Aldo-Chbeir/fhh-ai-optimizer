@@ -118,7 +118,11 @@ def build_forecast(
         "sku": sku,
         "market": market,
         "horizon_months": horizon_months,
-        "model": "prophet",
+        # Honest label: this is the deterministic synthetic fallback used
+        # when no Prophet pkl is on disk for this (market, sku). The real
+        # Prophet path lives in services/demand_prophet.py and returns
+        # "prophet" only when an actual trained model produced the values.
+        "model": "synthetic-fallback",
         "forecast": points,
         "seasonality_events": _ramadan_events(start, horizon_months),
         "regressors_used": _REGRESSORS,
