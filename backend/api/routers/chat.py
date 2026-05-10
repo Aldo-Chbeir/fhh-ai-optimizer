@@ -1,21 +1,29 @@
-"""Chat router — POST /chat (proxied to Anthropic with tool-use), conversation
-get/delete, and the cold-start suggested-prompts endpoint."""
+"""Chat router — POST /chat (proxied to Anthropic with tool-use) and the
+cold-start /chat/suggested-prompts endpoint.
+
+Conversation listing / retrieval / delete now live in
+backend/api/chat_memory/router.py (Postgres-backed, per-user). This file
+just owns the user→Anthropic turn loop, persisting each turn through the
+chat_memory service helpers so the assistant has memory across requests.
+"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Optional
+from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, Query, status
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse
 
-from ..db import get_conn
-from ..errors import ConversationNotFound
-from ..models import (
-    ChatRequest, ChatResponse,
-    Conversation, ConversationMessage,
-    SuggestedPrompts,
+from ..auth.dependencies import get_current_user
+from ..chat_memory.services import (
+    conversation_history_for_model, ensure_conversation_for_user,
+    persist_assistant_turn, persist_user_turn,
 )
+from ..db import get_conn, get_pool
+from ..errors import ConversationNotFound
+from ..models import ChatRequest, ChatResponse, SuggestedPrompts
 from ..services import chat as chat_service
 
 router = APIRouter(tags=["chat"])
@@ -25,37 +33,55 @@ def _iso_now() -> str:
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _get_pool_dep() -> asyncpg.Pool:
+    return get_pool()
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def post_chat(
     body: ChatRequest = Body(...),
     conn: asyncpg.Connection = Depends(get_conn),
+    pool: asyncpg.Pool = Depends(_get_pool_dep),
+    user: dict = Depends(get_current_user),
 ):
-    """Proxy a single user turn to Anthropic.
+    """Proxy a single user turn to Anthropic, persisting both sides.
 
-    Request shape (per API_CONTRACT.md v1.1):
-        {
-          "message": str,                    # latest user turn
-          "conversation_id": Optional[str],  # resume if provided
-          "context": {                       # current screen state
-              "current_page": ..., "current_machine_id": ..., ...
-          }
-        }
+    Auth is required (Phase A). The conversation is owned by `user.id`:
 
-    Response shape:
-        {
-          "conversation_id", "reply",
-          "data_sources_used": [...], "suggested_followups": [...],
-          "timestamp"
-        }
+      - `conversation_id` absent → new conversation auto-titled from the
+        first user message.
+      - `conversation_id` present + owned by user → resumed; Anthropic gets
+        the full prior {user, assistant} text history as memory.
+      - `conversation_id` present + NOT owned (or unknown) → 404
+        ConversationNotFound (single message — no enumeration leak).
 
     On Anthropic failure: HTTP 502 with
         { "error": "chat_unavailable", "detail": "...", "status": 502 }
     The API key is **never** echoed in any response or log.
     """
-    cid = body.conversation_id or chat_service.store.create()
-    chat_service.store.append(cid, "user", body.message)
+    user_uuid = UUID(user["id"])
 
-    history = chat_service.store.history_for_anthropic(cid)
+    # Resolve / create the conversation. ValueError from ensure_* means
+    # caller passed an id that exists for some other user (or doesn't
+    # exist at all, or isn't a UUID) — same 404 message in every case.
+    try:
+        conv = await ensure_conversation_for_user(
+            pool,
+            user_id=user_uuid,
+            conversation_id=body.conversation_id,
+            first_message=body.message,
+        )
+    except ValueError:
+        raise ConversationNotFound(body.conversation_id or "")
+
+    conv_uuid = UUID(conv["id"])
+
+    # Persist the user turn BEFORE the model call so a mid-call crash
+    # still leaves a recoverable trace, and so history_for_model below
+    # includes this turn at the tail.
+    await persist_user_turn(pool, conv_uuid, body.message)
+    history = await conversation_history_for_model(pool, conv_uuid)
+
     screen_payload = body.context.model_dump() if body.context else None
     screen_context = (
         body.context.current_page.value if body.context and body.context.current_page else None
@@ -75,43 +101,18 @@ async def post_chat(
                      "status": 502},
         )
 
-    chat_service.store.append(
-        cid, "assistant", result["reply"],
-        data_sources_used=result["data_sources_used"],
+    await persist_assistant_turn(
+        pool, conv_uuid, result["reply"],
+        data_sources_used=result["data_sources_used"] or None,
     )
 
     return ChatResponse(
-        conversation_id=cid,
+        conversation_id=str(conv_uuid),
         reply=result["reply"],
         data_sources_used=result["data_sources_used"],
         suggested_followups=result["suggested_followups"],
         timestamp=_iso_now(),
     )
-
-
-@router.get(
-    "/chat/conversations/{conversation_id}",
-    response_model=Conversation,
-)
-async def get_conversation(conversation_id: str) -> Conversation:
-    conv = chat_service.store.get(conversation_id)
-    if conv is None:
-        raise ConversationNotFound(conversation_id)
-    return Conversation(
-        conversation_id=conv["conversation_id"],
-        created_at=conv["created_at"],
-        messages=[ConversationMessage(**m) for m in conv["messages"]],
-    )
-
-
-@router.delete(
-    "/chat/conversations/{conversation_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-async def delete_conversation(conversation_id: str) -> Response:
-    if not chat_service.store.delete(conversation_id):
-        raise ConversationNotFound(conversation_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/chat/suggested-prompts", response_model=SuggestedPrompts)

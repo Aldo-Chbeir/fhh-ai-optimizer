@@ -35,6 +35,7 @@ from .routers import (
     sensors as sensors_router,
 )
 from .auth.router import router as auth_router
+from .chat_memory.router import router as chat_memory_router
 
 
 configure_logging("INFO")
@@ -151,6 +152,7 @@ app.include_router(admin_router.router)
 app.include_router(material_orders_router.router)
 app.include_router(calendar_router.router)
 app.include_router(auth_router)
+app.include_router(chat_memory_router)
 
 
 @app.get("/", include_in_schema=False)
