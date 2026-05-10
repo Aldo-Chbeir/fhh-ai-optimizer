@@ -115,7 +115,15 @@ async def login(
     # last_login_at on `user` is the OLD value (we updated after fetching).
     # Reflect "just now" so the response matches reality without a re-fetch.
     from datetime import datetime, timezone
-    user["last_login_at"] = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=timezone.utc)
+    user["last_login_at"] = now
+
+    # Fire login + fleet-digest emails in the background. Each is gated by
+    # its own .env toggle inside dispatch_login; both are wrapped in
+    # _dispatch_safe so a mailer hiccup never breaks the login response.
+    import asyncio
+    from ..notifications.services import dispatch_login
+    asyncio.create_task(dispatch_login(pool, user=user, login_time=now))
 
     return TokenResponse(
         access_token=token,

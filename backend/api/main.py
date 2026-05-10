@@ -94,7 +94,7 @@ async def lifespan(app: FastAPI):
     # Surface the email-notifications config once at startup so a
     # misconfigured deploy is visible immediately.
     from .notifications.config import (
-        NOTIFICATION_RECIPIENTS, notifications_enabled,
+        NOTIFICATION_RECIPIENTS, notifications_enabled, trigger_states,
     )
     if notifications_enabled():
         log.info(
@@ -105,6 +105,12 @@ async def lifespan(app: FastAPI):
         log.warning(
             "Email notifications DISABLED — RESEND_API_KEY or NOTIFICATION_RECIPIENTS missing in .env."
         )
+    states = trigger_states()
+    log.info(
+        "Email triggers — " + " ".join(
+            f"{k}:{'ON' if v else 'OFF'}" for k, v in states.items()
+        )
+    )
     try:
         yield
     finally:

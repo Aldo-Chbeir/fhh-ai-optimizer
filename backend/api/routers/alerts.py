@@ -121,6 +121,31 @@ async def patch_alert_schedule(
     )
     if payload is None:
         raise AlertNotFound(alert_id)
+
+    # Fire maint_scheduled email in the background. Gated by .env
+    # EMAIL_TRIGGER_MAINT_SCHEDULED. The dict mirrors what
+    # templates.maintenance_scheduled_email expects; dispatch_* enriches
+    # missing display names.
+    import asyncio
+    from ..db import get_pool
+    from ..notifications.services import dispatch_maintenance_scheduled
+    scheduled_for_email = {
+        "id":             alert_id,
+        "alert_id":       alert_id,
+        "machine_id":     payload.get("machine_id"),
+        "machine_name":   None,
+        "component_id":   None,
+        "component_name": None,
+        "action_type":    "Scheduled maintenance",
+        "scheduled_for":  body.scheduled_date,
+        "technician":     body.technician,
+        "priority":       body.priority,
+        "notes":          body.notes,
+    }
+    asyncio.create_task(
+        dispatch_maintenance_scheduled(get_pool(), scheduled=scheduled_for_email)
+    )
+
     return _to_status_update(payload)
 
 

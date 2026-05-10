@@ -65,6 +65,16 @@ async def post_maintenance_entry(
         duration_hours=body.duration_hours,
         performed_at=body.performed_at,
     )
+
+    # Fire-and-forget email notification. Toggle gated by .env
+    # EMAIL_TRIGGER_MAINT_LOGGED. Failure here MUST NOT break the user-facing
+    # 201 response — dispatch_maintenance_logged catches every exception.
+    import asyncio
+    from ..notifications.services import dispatch_maintenance_logged
+    entry_for_email = dict(row)
+    entry_for_email["logged_by_user_email"] = user.get("email")
+    asyncio.create_task(dispatch_maintenance_logged(pool, entry=entry_for_email))
+
     return MaintenanceEntry(**row)
 
 

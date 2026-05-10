@@ -50,6 +50,25 @@ async def post_material_order(
     payload = body.model_dump()
     payload["status"] = payload["status"].value
     row = await create_order(conn, payload)
+
+    # Fire-and-forget order_placed email. Gated by EMAIL_TRIGGER_ORDER_PLACED.
+    import asyncio
+    from ..db import get_pool
+    from ..notifications.services import dispatch_order_placed
+    order_for_email = dict(row)
+    order_for_email["id"] = row.get("order_id")
+    # Compute lead_time so the template doesn't have to subtract dates
+    try:
+        lead = (body.expected_arrival_date - body.order_date).days
+        order_for_email["lead_time_days"] = lead
+    except Exception:  # noqa: BLE001
+        pass
+    order_for_email["arrival_date"] = row.get("expected_arrival_date")
+    order_for_email["ordered_by_user_email"] = row.get("created_by")
+    asyncio.create_task(
+        dispatch_order_placed(get_pool(), order=order_for_email)
+    )
+
     return MaterialOrder(**row)
 
 

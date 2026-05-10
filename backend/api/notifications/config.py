@@ -41,3 +41,50 @@ DASHBOARD_URL: str = (os.getenv("DASHBOARD_URL") or "").strip() or "http://local
 def notifications_enabled() -> bool:
     """Both a key AND at least one recipient must be set for sends to happen."""
     return bool(RESEND_API_KEY) and len(NOTIFICATION_RECIPIENTS) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Per-trigger ON/OFF switches
+#
+# Each event type has its own .env flag so dev iteration doesn't email a
+# room of recipients on every login. Defaults follow noise-volume
+# expectations: low-frequency manual-action triggers default ON, the
+# every-login triggers default OFF.
+# ---------------------------------------------------------------------------
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() == "true"
+
+
+EMAIL_TRIGGER_LOGIN           = _bool_env("EMAIL_TRIGGER_LOGIN",           False)
+EMAIL_TRIGGER_FLEET_DIGEST    = _bool_env("EMAIL_TRIGGER_FLEET_DIGEST",    False)
+EMAIL_TRIGGER_MAINT_SCHEDULED = _bool_env("EMAIL_TRIGGER_MAINT_SCHEDULED", True)
+EMAIL_TRIGGER_MAINT_LOGGED    = _bool_env("EMAIL_TRIGGER_MAINT_LOGGED",    True)
+EMAIL_TRIGGER_ORDER_PLACED    = _bool_env("EMAIL_TRIGGER_ORDER_PLACED",    True)
+
+
+def trigger_states() -> dict[str, bool]:
+    """One source of truth for the 5 toggles. Used by `trigger_enabled` and
+    by the lifespan startup banner so what's logged matches what fires."""
+    return {
+        "login":           EMAIL_TRIGGER_LOGIN,
+        "fleet_digest":    EMAIL_TRIGGER_FLEET_DIGEST,
+        "maint_scheduled": EMAIL_TRIGGER_MAINT_SCHEDULED,
+        "maint_logged":    EMAIL_TRIGGER_MAINT_LOGGED,
+        "order_placed":    EMAIL_TRIGGER_ORDER_PLACED,
+    }
+
+
+def trigger_enabled(trigger_name: str) -> bool:
+    """Composite gate: notifications globally enabled AND this trigger ON.
+
+    Call sites do `if not trigger_enabled('maint_logged'): return` rather
+    than checking flags individually so a missing key in .env can't
+    accidentally fire the wrong subset.
+    """
+    if not notifications_enabled():
+        return False
+    return trigger_states().get(trigger_name, False)
