@@ -34,3 +34,5 @@ models/**/*.joblib
 models/**/*.json
 !models/.gitkeep
 !models/**/.gitkeep
+
+alerts-debug.json
