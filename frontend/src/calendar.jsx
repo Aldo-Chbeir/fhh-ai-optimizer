@@ -24,10 +24,13 @@ const {
 
 
 // ─── Color palette per source ──────────────────────────────────────────────
+// `user_maintenance` (Phase D — operator-logged work) uses teal so it reads
+// as distinct from `past_maintenance` (which is the seeded blue history).
 const SOURCE_STYLE = {
   alert:                 { bg: "#DC2626", text: "#FFFFFF", label: "Active alerts" },
   scheduled_maintenance: { bg: "#F59E0B", text: "#FFFFFF", label: "Scheduled maintenance" },
   past_maintenance:      { bg: "#3B82F6", text: "#FFFFFF", label: "Past maintenance" },
+  user_maintenance:      { bg: "#0E7490", text: "#FFFFFF", label: "User maintenance" },
   material_order:        { bg: "#10B981", text: "#FFFFFF", label: "Material orders" },
   custom:                { bg: "#6B7280", text: "#FFFFFF", label: "Custom events" },
 };
@@ -151,21 +154,37 @@ function mapEvent(feedItem) {
 
 
 // ─── Header ────────────────────────────────────────────────────────────────
-function CalendarHeader() {
+function CalendarHeader({ onLogMaintenance }) {
   return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{
-        fontSize: 11, fontWeight: 700, letterSpacing: 0.6,
-        textTransform: "uppercase", color: "#6B7280",
-      }}>Operations</div>
-      <h1 style={{
-        fontSize: 24, fontWeight: 600, color: "#0A1F44",
-        margin: "4px 0 6px", letterSpacing: -0.4,
-      }}>Operations Calendar</h1>
-      <div style={{ fontSize: 13, color: "#6B7280", maxWidth: 720 }}>
-        Unified view of alerts, maintenance, orders, and scheduled events
-        across the fleet.
+    <div style={{
+      marginBottom: 16,
+      display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12,
+    }}>
+      <div>
+        <div style={{
+          fontSize: 11, fontWeight: 700, letterSpacing: 0.6,
+          textTransform: "uppercase", color: "#6B7280",
+        }}>Operations</div>
+        <h1 style={{
+          fontSize: 24, fontWeight: 600, color: "#0A1F44",
+          margin: "4px 0 6px", letterSpacing: -0.4,
+        }}>Operations Calendar</h1>
+        <div style={{ fontSize: 13, color: "#6B7280", maxWidth: 720 }}>
+          Unified view of alerts, maintenance, orders, and scheduled events
+          across the fleet.
+        </div>
       </div>
+      {onLogMaintenance && (
+        <button onClick={onLogMaintenance} style={{
+          padding: "8px 14px", borderRadius: 8,
+          border: "1px solid #0E7490", background: "white", color: "#0E7490",
+          fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+          flexShrink: 0,
+        }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = "#ECFEFF"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "white"; }}
+        >📝 Log Maintenance</button>
+      )}
     </div>
   );
 }
@@ -768,6 +787,7 @@ function EventDetailModal({ event, onClose }) {
     alert:                 "Active alert",
     scheduled_maintenance: "Scheduled maintenance",
     past_maintenance:      "Past maintenance",
+    user_maintenance:      "Maintenance entry",
     material_order:        "Material order",
     custom:                "Custom event",
   };
@@ -797,6 +817,13 @@ function EventDetailModal({ event, onClose }) {
     if (event.machine_id)             fields.push({ label: "Machine",    value: event.machine_id });
     if (event.technician)             fields.push({ label: "Technician", value: event.technician });
     if (event.downtime_hours != null) fields.push({ label: "Downtime",   value: `${event.downtime_hours} h` });
+    if (event.cost_usd != null)       fields.push({ label: "Cost",       value: `$${Number(event.cost_usd).toLocaleString()}` });
+  } else if (event.source === "user_maintenance") {
+    if (event.machine_id)             fields.push({ label: "Machine",    value: event.machine_id });
+    if (event.component_id)           fields.push({ label: "Component",  value: event.component_id, capitalize: true });
+    if (event.maintenance_type)       fields.push({ label: "Type",       value: event.maintenance_type, capitalize: true });
+    if (event.technician)             fields.push({ label: "Technician", value: event.technician });
+    if (event.duration_hours != null) fields.push({ label: "Duration",   value: `${event.duration_hours} h` });
     if (event.cost_usd != null)       fields.push({ label: "Cost",       value: `$${Number(event.cost_usd).toLocaleString()}` });
   } else if (event.source === "material_order") {
     // Show BOTH dates regardless of whether user clicked the placed or
@@ -914,6 +941,9 @@ function CalendarScreen() {
 
   const [bundleMissing, setBundleMissing] = useStateCal(false);
   const [detailEvent,   setDetailEvent]   = useStateCal(null);
+  const [logMaintOpen,  setLogMaintOpen]  = useStateCal(false);
+  // Bumped after a successful log so the active view re-fetches its feed.
+  const [feedRevision,  setFeedRevision]  = useStateCal(0);
 
   useEffectCal(() => {
     if (!window.FullCalendar || !window.FullCalendar.Calendar) {
@@ -1055,7 +1085,7 @@ function CalendarScreen() {
       padding: 24, boxSizing: "border-box",
     }}>
       <CalendarStyles />
-      <CalendarHeader />
+      <CalendarHeader onLogMaintenance={() => setLogMaintOpen(true)} />
       <CalendarLegend />
       {isFCSlot && fcError && <ErrorBanner error={fcError} onRetry={retryFC} />}
       {bundleMissing && (
@@ -1130,6 +1160,20 @@ function CalendarScreen() {
         <EventDetailModal
           event={detailEvent}
           onClose={() => setDetailEvent(null)}
+        />
+      )}
+      {logMaintOpen && (
+        <MaintenanceEntryModal
+          onClose={() => setLogMaintOpen(false)}
+          onSubmitted={() => {
+            setLogMaintOpen(false);
+            // Bump the revision so all three view modes re-pull. FC view
+            // refetches via its own ref; agenda/year via dependency change.
+            setFeedRevision((n) => n + 1);
+            if (calRef.current) calRef.current.refetchEvents();
+            // Also nudge focalDate so month/year effects re-run.
+            setFocalDate((d) => new Date(d.getTime()));
+          }}
         />
       )}
     </div>

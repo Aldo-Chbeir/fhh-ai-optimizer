@@ -114,8 +114,9 @@ SOURCE_ORDER = {
     "alert":                 0,
     "scheduled_maintenance": 1,
     "past_maintenance":      2,
-    "material_order":        3,
-    "custom":                4,
+    "user_maintenance":      3,
+    "material_order":        4,
+    "custom":                5,
 }
 
 
@@ -280,6 +281,42 @@ async def _query_material_orders(pool: asyncpg.Pool, start: date, end: date) -> 
     return out
 
 
+async def _query_user_maintenance(pool: asyncpg.Pool, start: date, end: date) -> list[dict]:
+    """User-logged maintenance entries (Phase D). Distinct from
+    `_query_past_maintenance`, which reads the seeded `maintenance_logs`."""
+    from ..maintenance.services import list_entries_in_date_range
+    rows = await list_entries_in_date_range(pool, start, end)
+    out = []
+    for r in rows:
+        # Title: "{Type} maintenance: {first 30 chars of description}".
+        # Capitalise the type so it reads cleanly alongside past_maintenance.
+        mtype = (r["maintenance_type"] or "maintenance").capitalize()
+        desc = r["work_description"] or ""
+        snippet = desc.strip().splitlines()[0] if desc.strip() else ""
+        if len(snippet) > 30:
+            snippet = snippet[:29].rstrip() + "…"
+        title = f"{mtype}: {snippet}" if snippet else f"{mtype} maintenance"
+        out.append({
+            "source":           "user_maintenance",
+            "id":               r["id"],
+            "date":             r["performed_at"].astimezone(timezone.utc).date().isoformat(),
+            "title":            title,
+            "machine_id":       r["machine_id"],
+            "component_id":     r["component_id"],
+            "maintenance_type": r["maintenance_type"],
+            "work_description": r["work_description"],
+            # Aliased into `notes` so the existing EventDetailModal "Notes"
+            # block on the frontend renders the description without needing
+            # a separate field — same pattern as past_maintenance.
+            "notes":            r["work_description"],
+            "technician":       r["technician_name"],
+            "cost_usd":         r["cost_usd"],
+            "duration_hours":   r["duration_hours"],
+            "performed_at":     _ts(r["performed_at"]),
+        })
+    return out
+
+
 async def _query_custom(pool: asyncpg.Pool, start: date, end: date) -> list[dict]:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -319,6 +356,7 @@ async def get_unified_feed(start: date, end: date) -> tuple[list[dict], bool]:
         _query_alerts(pool, start, end),
         _query_scheduled(pool, start, end),
         _query_past_maintenance(pool, start, end),
+        _query_user_maintenance(pool, start, end),
         _query_material_orders(pool, start, end),
         _query_custom(pool, start, end),
     )

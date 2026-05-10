@@ -36,6 +36,7 @@ from .routers import (
 )
 from .auth.router import router as auth_router
 from .chat_memory.router import router as chat_memory_router
+from .maintenance.router import router as maintenance_router
 
 
 configure_logging("INFO")
@@ -153,6 +154,7 @@ app.include_router(material_orders_router.router)
 app.include_router(calendar_router.router)
 app.include_router(auth_router)
 app.include_router(chat_memory_router)
+app.include_router(maintenance_router)
 
 
 @app.get("/", include_in_schema=False)

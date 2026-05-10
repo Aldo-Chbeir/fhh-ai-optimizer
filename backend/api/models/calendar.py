@@ -81,6 +81,14 @@ class CalendarFeedItem(BaseModel):
     event_type: Optional[str] = None
     event_time: Optional[str] = None
     duration_minutes: Optional[int] = None
+    # source='user_maintenance' (Phase D). component_id is the same kind of
+    # six-bucket id used elsewhere in the contract; performed_at is the full
+    # ISO timestamp (date alone is in `date` already).
+    component_id: Optional[str] = None
+    maintenance_type: Optional[str] = None
+    work_description: Optional[str] = None
+    duration_hours: Optional[float] = None
+    performed_at: Optional[str] = None
 
 
 class CalendarFeed(BaseModel):

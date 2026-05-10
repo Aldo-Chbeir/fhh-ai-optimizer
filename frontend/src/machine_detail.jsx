@@ -519,11 +519,33 @@ function MaintTypePill({ type }) {
   );
 }
 
-function MaintenanceHistoryPanel({ logs }) {
+function MaintenanceHistoryPanel({ logs, machineId, machineName, components, onLogged }) {
+  const [logOpen, setLogOpen] = useStateMd(false);
   if (!logs) return <PanelShell />;
   return (
     <div style={panelShell}>
-      <div style={panelHeader}>Maintenance History</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <div style={panelHeader}>Maintenance History</div>
+        {machineId && (
+          <button onClick={() => setLogOpen(true)} style={{
+            padding: "5px 10px", borderRadius: 6,
+            border: "1px solid #0E7490", background: "white", color: "#0E7490",
+            fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+          }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "#ECFEFF"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "white"; }}
+          >📝 Log Maintenance</button>
+        )}
+      </div>
+      {logOpen && (
+        <MaintenanceEntryModal
+          machineId={machineId}
+          machineLabel={machineName || machineId}
+          components={components}
+          onClose={() => setLogOpen(false)}
+          onSubmitted={(entry) => { setLogOpen(false); if (onLogged) onLogged(entry); }}
+        />
+      )}
       <div style={{ marginTop: 12, position: "relative" }}>
         {/* timeline rail */}
         <div style={{ position: "absolute", left: 7, top: 8, bottom: 8, width: 2, background: "#EFF1F5" }} />
@@ -743,7 +765,12 @@ function MachineDetailScreen({ machineId, onBack, onSelectComponent }) {
         gap: 14, marginTop: 4,
       }}>
         <RecentAlarmsPanel alarms={alarms} />
-        <MaintenanceHistoryPanel logs={maintLog} />
+        <MaintenanceHistoryPanel
+          logs={maintLog}
+          machineId={machineId}
+          machineName={machine?.name}
+          components={components || []}
+        />
       </div>
     </div>
   );
