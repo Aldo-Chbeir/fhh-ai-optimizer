@@ -264,4 +264,26 @@ CREATE INDEX IF NOT EXISTS idx_user_maint_machine_id   ON user_maintenance_entri
 CREATE INDEX IF NOT EXISTS idx_user_maint_user_id      ON user_maintenance_entries(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_maint_performed_at ON user_maintenance_entries(performed_at DESC);
 
+-- ----------------------------------------------------------------------------
+-- email_notifications_sent  (Resend dedupe + audit log — see migration 0006)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS email_notifications_sent (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    notification_type   VARCHAR(50)  NOT NULL CHECK (notification_type IN (
+                            'alert_critical', 'alert_warning',
+                            'maintenance_scheduled', 'maintenance_logged',
+                            'order_placed', 'test'
+                        )),
+    source_id           VARCHAR(255) NOT NULL,
+    recipient           VARCHAR(255) NOT NULL,
+    subject             TEXT         NOT NULL,
+    sent_at             TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    success             BOOLEAN      NOT NULL DEFAULT TRUE,
+    resend_id           VARCHAR(255),
+    error_message       TEXT,
+    UNIQUE (notification_type, source_id, recipient)
+);
+CREATE INDEX IF NOT EXISTS idx_email_notif_type_source ON email_notifications_sent(notification_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_email_notif_sent_at     ON email_notifications_sent(sent_at DESC);
+
 COMMIT;

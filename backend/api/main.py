@@ -37,6 +37,7 @@ from .routers import (
 from .auth.router import router as auth_router
 from .chat_memory.router import router as chat_memory_router
 from .maintenance.router import router as maintenance_router
+from .notifications.router import router as notifications_router
 
 
 configure_logging("INFO")
@@ -89,6 +90,21 @@ async def lifespan(app: FastAPI):
         # Background pre-warm: serve requests immediately, populate the
         # alert-risk cache in parallel.
         asyncio.create_task(_warm_alert_risk_cache_bg())
+
+    # Surface the email-notifications config once at startup so a
+    # misconfigured deploy is visible immediately.
+    from .notifications.config import (
+        NOTIFICATION_RECIPIENTS, notifications_enabled,
+    )
+    if notifications_enabled():
+        log.info(
+            "Email notifications ENABLED — %d recipient(s).",
+            len(NOTIFICATION_RECIPIENTS),
+        )
+    else:
+        log.warning(
+            "Email notifications DISABLED — RESEND_API_KEY or NOTIFICATION_RECIPIENTS missing in .env."
+        )
     try:
         yield
     finally:
@@ -155,6 +171,7 @@ app.include_router(calendar_router.router)
 app.include_router(auth_router)
 app.include_router(chat_memory_router)
 app.include_router(maintenance_router)
+app.include_router(notifications_router)
 
 
 @app.get("/", include_in_schema=False)
