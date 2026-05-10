@@ -1116,7 +1116,7 @@ function DriversList({ drivers, market, sku, productLabel }) {
 }
 
 // ───────────── ACCURACY ─────────────
-function AccuracyStrip({ accuracy }) {
+function AccuracyStrip({ accuracy, onOpenAccuracy }) {
   if (!accuracy) return null;
   // The contract /forecast response only returns mape/confidence (derived
   // client-side from forecast bands by enrichForecast). The richer
@@ -1182,8 +1182,7 @@ function AccuracyStrip({ accuracy }) {
         fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
         justifySelf: "end",
       }}
-        onClick={() => window.dispatchEvent(new CustomEvent("fhh:chat:send",
-          { detail: "Show me the full accuracy report — by market, SKU, and time period." }))}
+        onClick={() => onOpenAccuracy && onOpenAccuracy()}
         onMouseEnter={(e) => { e.currentTarget.style.background = "#F4F7FC"; }}
         onMouseLeave={(e) => { e.currentTarget.style.background = "white"; }}
       >View accuracy report →</button>
@@ -1198,6 +1197,342 @@ function AccCell({ label, value, sub, accent }) {
       <div style={{ fontSize: 16, fontWeight: 600, marginTop: 4, color: accent || "#0A1F44",
         fontVariantNumeric: "tabular-nums" }}>{value}</div>
       <div style={{ fontSize: 11.5, color: "#6B7280", marginTop: 2 }}>{sub}</div>
+    </div>
+  );
+}
+
+// ───────────── ACCURACY REPORT MODAL ─────────────
+// Opens from the "View accuracy report →" button in AccuracyStrip. Fetches
+// /demand/accuracy for the currently selected (market, sku) and renders:
+//   1. Confidence-band coverage % over the trailing 90 days (+ 3 stat boxes)
+//   2. Forecast-vs-actual line chart with the model's confidence band shaded
+//
+// Modal styling matches calendar.jsx EventDetailModal: same overlay alpha,
+// same shadow, same Close button. Card is slightly wider (640) to fit the
+// chart comfortably.
+function AccuracyReportModal({ sku, market, productLabel, marketLabel, onClose }) {
+  const [data, setData] = useStateD(null);
+  const [error, setError] = useStateD(null);
+  const [reqId, setReqId] = useStateD(0);  // bump to retry
+
+  useEffectD(() => {
+    let cancelled = false;
+    setData(null); setError(null);
+    window.api.get("/demand/accuracy", { market, sku, days: 90 })
+      .then((r) => { if (!cancelled) setData(r); })
+      .catch((e) => { if (!cancelled) setError(e?.message || "Request failed"); });
+    return () => { cancelled = true; };
+  }, [market, sku, reqId]);
+
+  // Coverage colour: green if hit target, amber if within 5pp below, red beyond.
+  const coverageColour = (pct, target) => {
+    if (pct >= target) return { fg: "#0F8B5C", bg: "#E6F6EE" };
+    if (pct >= target - 5) return { fg: "#B14A00", bg: "#FFF3E0" };
+    return { fg: "#B31E2B", bg: "#FCE3E5" };
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 100,
+      background: "rgba(10,31,68,0.45)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: 24,
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: "white", borderRadius: 12, width: 640, maxWidth: "100%",
+        padding: "22px 24px", boxShadow: "0 20px 60px rgba(10,31,68,0.25)",
+        display: "flex", flexDirection: "column", gap: 14,
+        maxHeight: "92vh", overflowY: "auto",
+      }}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+          <div>
+            <span style={{
+              display: "inline-block",
+              background: "#0E7490", color: "#FFFFFF",
+              fontSize: 11, fontWeight: 700, letterSpacing: 0.4,
+              textTransform: "uppercase",
+              padding: "3px 10px", borderRadius: 999,
+              marginBottom: 8,
+            }}>Accuracy report</span>
+            <div style={{ fontSize: 18, fontWeight: 600, color: "#0A1F44",
+              letterSpacing: -0.3, lineHeight: 1.3 }}>{productLabel}</div>
+            <div style={{ fontSize: 12.5, color: "#6B7280", marginTop: 4 }}>
+              {marketLabel} · Last 90 days
+            </div>
+          </div>
+          <button onClick={onClose} aria-label="Close" style={{
+            border: "none", background: "transparent", color: "#6B7280",
+            fontSize: 22, lineHeight: 1, cursor: "pointer",
+            alignSelf: "flex-start", padding: "0 4px",
+          }}>×</button>
+        </div>
+
+        {/* Loading */}
+        {!data && !error && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ height: 80, background: "#F4F6FA", borderRadius: 8 }} />
+            <div style={{ height: 220, background: "#F4F6FA", borderRadius: 8 }} />
+            <div style={{ fontSize: 12, color: "#6B7280", textAlign: "center" }}>
+              Loading accuracy report…
+            </div>
+          </div>
+        )}
+
+        {/* Error */}
+        {error && (
+          <div style={{
+            background: "#FCE3E5", border: "1px solid #F5B5BB",
+            color: "#7A0F1B", padding: "14px 16px", borderRadius: 8,
+            display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12,
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 500 }}>Couldn't load accuracy report</div>
+            <button onClick={() => setReqId((n) => n + 1)} style={{
+              padding: "6px 12px", borderRadius: 7,
+              border: "none", background: "#B31E2B", color: "white",
+              fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+            }}>Retry</button>
+          </div>
+        )}
+
+        {/* Loaded */}
+        {data && (() => {
+          const c = data.confidence_coverage;
+          const tone = coverageColour(c.coverage_pct, c.target_pct);
+          const meets = c.coverage_pct >= c.target_pct;
+          return (
+            <>
+              {/* Section 1 — coverage */}
+              <div style={{
+                background: tone.bg, border: `1px solid ${tone.fg}33`,
+                borderRadius: 10, padding: "16px 18px",
+                display: "flex", flexDirection: "column", gap: 12,
+              }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{
+                    fontSize: 36, fontWeight: 700, color: tone.fg, letterSpacing: -1,
+                    fontVariantNumeric: "tabular-nums",
+                  }}>{c.coverage_pct.toFixed(1)}%</div>
+                  <div style={{ fontSize: 13, color: "#374151" }}>
+                    of actuals fell within the predicted range
+                  </div>
+                </div>
+                <div style={{ fontSize: 12.5, color: "#4B5563" }}>
+                  Target: {c.target_pct.toFixed(0)}% · Actual: {c.coverage_pct.toFixed(1)}%
+                  {meets ? " ✓" : " ⚠"}
+                </div>
+                <div style={{
+                  display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10,
+                }}>
+                  <AccStatBox label="Within band" value={`${c.within_band} days`} />
+                  <AccStatBox label="Above predicted" value={`${c.above_band} days`} />
+                  <AccStatBox label="Below predicted" value={`${c.below_band} days`} />
+                </div>
+              </div>
+
+              {/* Section 2 — chart */}
+              <AccuracyChart daily={data.daily} />
+
+              {/* Footer note */}
+              <div style={{
+                fontSize: 11.5, color: "#6B7280", lineHeight: 1.5,
+                paddingTop: 4, borderTop: "1px solid #F0F2F6",
+              }}>
+                Coverage is the % of historical actuals that fell within the model's
+                predicted confidence interval. Higher is better — indicates the AI's
+                uncertainty estimates are well-calibrated.
+              </div>
+            </>
+          );
+        })()}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+          <button onClick={onClose} style={{
+            padding: "8px 14px", borderRadius: 7,
+            border: "none", background: "#0A1F44", color: "white",
+            fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+          }}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AccStatBox({ label, value }) {
+  return (
+    <div style={{
+      background: "white", border: "1px solid #E5E8EE",
+      borderRadius: 8, padding: "10px 12px",
+    }}>
+      <div style={{
+        fontSize: 10, color: "#6B7280", fontWeight: 600,
+        letterSpacing: 0.4, textTransform: "uppercase",
+      }}>{label}</div>
+      <div style={{
+        fontSize: 16, fontWeight: 600, color: "#0A1F44", marginTop: 2,
+        fontVariantNumeric: "tabular-nums",
+      }}>{value}</div>
+    </div>
+  );
+}
+
+// Inline SVG line chart — three series (actual, forecast) plus a shaded
+// confidence band between yhat_lower and yhat_upper. Same SVG approach as
+// the rest of this file (HeroChart) so the visual language matches without
+// pulling in a chart lib.
+function AccuracyChart({ daily }) {
+  const [hover, setHover] = useStateD(null);
+  if (!daily || daily.length === 0) return null;
+
+  const W = 580, H = 220;
+  const padL = 44, padR = 12, padT = 12, padB = 30;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const n = daily.length;
+
+  let yMax = 0, yMin = Infinity;
+  for (const p of daily) {
+    if (p.yhat_upper > yMax) yMax = p.yhat_upper;
+    if (p.actual > yMax) yMax = p.actual;
+    if (p.yhat_lower < yMin) yMin = p.yhat_lower;
+    if (p.actual < yMin) yMin = p.actual;
+  }
+  const span = Math.max(1, yMax - yMin);
+  yMin = Math.max(0, yMin - span * 0.10);
+  yMax = yMax + span * 0.10;
+
+  const xAt = (i) => padL + (i / Math.max(1, n - 1)) * plotW;
+  const yAt = (v) => padT + (1 - (v - yMin) / (yMax - yMin)) * plotH;
+  const fmtNum = (v) => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v));
+
+  let bandTop = "M ";
+  daily.forEach((p, i) => {
+    bandTop += (i === 0 ? "" : " L ") + xAt(i).toFixed(1) + " " + yAt(p.yhat_upper).toFixed(1);
+  });
+  let bandBottom = "";
+  for (let i = n - 1; i >= 0; i--) {
+    bandBottom += " L " + xAt(i).toFixed(1) + " " + yAt(daily[i].yhat_lower).toFixed(1);
+  }
+  const bandPath = bandTop + bandBottom + " Z";
+
+  const linePath = (key) => {
+    let d = "";
+    daily.forEach((p, i) => {
+      d += (i === 0 ? "M " : " L ") + xAt(i).toFixed(1) + " " + yAt(p[key]).toFixed(1);
+    });
+    return d;
+  };
+  const actualPath = linePath("actual");
+  const forecastPath = linePath("forecast");
+
+  const yTicks = [yMin, yMin + (yMax - yMin) / 2, yMax];
+
+  // x-axis: first-of-month labels
+  const monthLabels = [];
+  let lastMonth = null;
+  daily.forEach((p, i) => {
+    const m = p.date.slice(0, 7);
+    if (m !== lastMonth) {
+      monthLabels.push({ i, label: new Date(p.date + "T00:00:00").toLocaleDateString("en-US", { month: "short" }) });
+      lastMonth = m;
+    }
+  });
+
+  function onMove(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const xPx = ((e.clientX - rect.left) / rect.width) * W;
+    const idx = Math.round(((xPx - padL) / plotW) * (n - 1));
+    if (idx >= 0 && idx < n) setHover(idx);
+  }
+
+  return (
+    <div style={{
+      background: "white", border: "1px solid #E5E8EE",
+      borderRadius: 10, padding: "14px 16px",
+    }}>
+      {/* Legend */}
+      <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 8, fontSize: 11.5, color: "#4B5563" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <svg width="22" height="6"><line x1="0" x2="22" y1="3" y2="3" stroke="#0A1F44" strokeWidth="2" /></svg>
+          Actual
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <svg width="22" height="6"><line x1="0" x2="22" y1="3" y2="3" stroke="#15A56C" strokeWidth="2" /></svg>
+          Forecast
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 14, height: 10, background: "#15A56C", opacity: 0.18, borderRadius: 2, display: "inline-block" }} />
+          Confidence band
+        </span>
+      </div>
+
+      <div style={{ position: "relative" }}>
+        <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H}
+          onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+          {/* gridlines */}
+          {yTicks.map((v, i) => (
+            <g key={i}>
+              <line x1={padL} x2={W - padR} y1={yAt(v)} y2={yAt(v)}
+                stroke="#EEF1F6" strokeWidth="1" />
+              <text x={padL - 6} y={yAt(v) + 3} fontSize="10" fill="#6B7280" textAnchor="end"
+                fontFamily="inherit">{fmtNum(v)}</text>
+            </g>
+          ))}
+          {/* band */}
+          <path d={bandPath} fill="#15A56C" opacity="0.18" stroke="none" />
+          {/* lines */}
+          <path d={forecastPath} fill="none" stroke="#15A56C" strokeWidth="1.6" />
+          <path d={actualPath} fill="none" stroke="#0A1F44" strokeWidth="1.8" />
+          {/* x labels */}
+          {monthLabels.map((m, i) => (
+            <text key={i} x={xAt(m.i)} y={H - 10} fontSize="10" fill="#6B7280"
+              textAnchor="middle" fontFamily="inherit">{m.label}</text>
+          ))}
+          {/* hover */}
+          {hover != null && (
+            <>
+              <line x1={xAt(hover)} x2={xAt(hover)} y1={padT} y2={H - padB}
+                stroke="#9CA3AF" strokeDasharray="3 3" strokeWidth="1" />
+              <circle cx={xAt(hover)} cy={yAt(daily[hover].actual)} r="3.5"
+                fill="#0A1F44" />
+              <circle cx={xAt(hover)} cy={yAt(daily[hover].forecast)} r="3.5"
+                fill="#15A56C" />
+            </>
+          )}
+        </svg>
+        {hover != null && (() => {
+          const p = daily[hover];
+          // Position tooltip; flip to left edge if hovering right half
+          const leftPct = (xAt(hover) / W) * 100;
+          const leftSide = leftPct > 60;
+          return (
+            <div style={{
+              position: "absolute",
+              top: 8,
+              [leftSide ? "left" : "right"]: 8,
+              background: "white", border: "1px solid #DCE2EC",
+              borderRadius: 6, padding: "8px 10px",
+              boxShadow: "0 4px 12px rgba(10,31,68,0.10)",
+              fontSize: 11.5, color: "#0A1F44", pointerEvents: "none",
+              minWidth: 150,
+            }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                {new Date(p.date + "T00:00:00").toLocaleDateString("en-US",
+                  { weekday: "short", month: "short", day: "numeric" })}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "max-content 1fr", gap: "2px 10px" }}>
+                <span style={{ color: "#6B7280" }}>Actual</span>
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>{p.actual.toLocaleString()}</span>
+                <span style={{ color: "#6B7280" }}>Forecast</span>
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>{p.forecast.toLocaleString()}</span>
+                <span style={{ color: "#6B7280" }}>Range</span>
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                  {p.yhat_lower.toLocaleString()}–{p.yhat_upper.toLocaleString()}
+                </span>
+              </div>
+            </div>
+          );
+        })()}
+      </div>
     </div>
   );
 }
@@ -1711,6 +2046,7 @@ function DemandForecastScreen({ onNavigate }) {
   const [toast, setToast] = useStateD(null);
   const [orderModalOpen, setOrderModalOpen] = useStateD(false);
   const [orderToastVisible, setOrderToastVisible] = useStateD(false);
+  const [accuracyModalOpen, setAccuracyModalOpen] = useStateD(false);
 
   // persist
   useEffectD(() => {
@@ -1947,7 +2283,22 @@ function DemandForecastScreen({ onNavigate }) {
       )}
 
       {/* Section F — accuracy */}
-      {forecastData && <AccuracyStrip accuracy={forecastData.accuracy} />}
+      {forecastData && (
+        <AccuracyStrip
+          accuracy={forecastData.accuracy}
+          onOpenAccuracy={() => setAccuracyModalOpen(true)}
+        />
+      )}
+
+      {accuracyModalOpen && (
+        <AccuracyReportModal
+          sku={sku}
+          market={market}
+          productLabel={productLabel}
+          marketLabel={MARKET_LABEL[market] || market}
+          onClose={() => setAccuracyModalOpen(false)}
+        />
+      )}
 
       {/* modals + drill-ins */}
       {scheduleRow && (

@@ -22,6 +22,7 @@ from .demand import (
     ScenarioRequest, ScenarioResponse, ScenarioBlock, DeltaSummary,
     DemandAnomaly, DemandAnomalyList,
     SeasonalityMonthIndex, SeasonalityNamedEvent, Seasonality,
+    AccuracyDailyPoint, ConfidenceCoverage, AccuracyReport,
 )
 from .chat import (
     ChatRequest, ChatContext, ChatResponse,
@@ -56,6 +57,7 @@ __all__ = [
     "ScenarioRequest", "ScenarioResponse", "ScenarioBlock", "DeltaSummary",
     "DemandAnomaly", "DemandAnomalyList",
     "SeasonalityMonthIndex", "SeasonalityNamedEvent", "Seasonality",
+    "AccuracyDailyPoint", "ConfidenceCoverage", "AccuracyReport",
     "ChatRequest", "ChatContext", "ChatResponse",
     "ConversationMessage", "Conversation", "SuggestedPrompts",
     "KPIOverview", "CostSavings", "MachineCostBreakdown",

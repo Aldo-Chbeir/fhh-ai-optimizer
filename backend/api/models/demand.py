@@ -108,3 +108,32 @@ class Seasonality(BaseModel):
     market: Optional[str] = None
     yearly_pattern: list[SeasonalityMonthIndex]
     events: list[SeasonalityNamedEvent]
+
+
+class AccuracyDailyPoint(BaseModel):
+    date: str
+    actual: int
+    forecast: int
+    yhat_lower: int
+    yhat_upper: int
+    in_band: bool
+
+
+class ConfidenceCoverage(BaseModel):
+    total_observations: int
+    within_band: int
+    above_band: int
+    below_band: int
+    coverage_pct: float
+    target_pct: float
+
+
+class AccuracyReport(BaseModel):
+    market: str
+    sku: str
+    period_days: int
+    mape: float
+    confidence_coverage: ConfidenceCoverage
+    daily: list[AccuracyDailyPoint]
+    model: str
+    generated_at: str

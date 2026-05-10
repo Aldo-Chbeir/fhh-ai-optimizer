@@ -13,12 +13,14 @@ from ..models import (
     ScenarioRequest, ScenarioResponse, DeltaSummary,
     DemandAnomaly, DemandAnomalyList,
     Seasonality, SeasonalityMonthIndex, SeasonalityNamedEvent,
+    AccuracyReport, AccuracyDailyPoint, ConfidenceCoverage,
 )
 from ..services.constants import MARKET_NAMES, VALID_MARKET_IDS
 from ..services.forecast import (
     apply_scenario, build_forecast, seasonality_for,
 )
 from ..services import demand_prophet
+from ..services.demand_accuracy import accuracy_report
 
 router = APIRouter(tags=["demand"])
 
@@ -253,6 +255,33 @@ async def get_demand_anomalies(
         ))
 
     return DemandAnomalyList(anomalies=anomalies)
+
+
+# -----------------------------------------------------------------------------
+# Accuracy report — coverage + per-day forecast vs actual for one (market, sku)
+# -----------------------------------------------------------------------------
+
+@router.get("/demand/accuracy", response_model=AccuracyReport)
+async def get_demand_accuracy(
+    market: str = Query(..., min_length=1),
+    sku: str = Query(..., min_length=1),
+    days: int = Query(90, ge=7, le=365),
+    conn: asyncpg.Connection = Depends(get_conn),
+) -> AccuracyReport:
+    if market not in VALID_MARKET_IDS:
+        raise MarketNotFound(market)
+    product = await _resolve_sku(conn, sku)
+
+    payload = accuracy_report(
+        sku=sku, market=market, days=days, category=product.get("category"),
+    )
+    return AccuracyReport(
+        market=payload["market"], sku=payload["sku"],
+        period_days=payload["period_days"], mape=payload["mape"],
+        confidence_coverage=ConfidenceCoverage(**payload["confidence_coverage"]),
+        daily=[AccuracyDailyPoint(**d) for d in payload["daily"]],
+        model=payload["model"], generated_at=payload["generated_at"],
+    )
 
 
 # -----------------------------------------------------------------------------
