@@ -39,10 +39,14 @@ async def post_calendar_event(
     _validate_machine(body.machine_id)
     payload = body.model_dump()
     payload["event_type"] = payload["event_type"].value
+    # `notify_maintenance` (transient) is the request flag that drives BOTH
+    # the badge discriminator and the email dispatch. `priority` is request-
+    # only — no column for it on calendar_events_custom (the email template
+    # picks it up here, then it's gone). `component_id` and `technician` are
+    # persisted as columns and surfaced back through the feed.
     notify = payload.pop("notify_maintenance", False)
-    component_id = payload.pop("component_id", None)
-    technician = payload.pop("technician", None)
     priority = payload.pop("priority", None)
+    payload["is_scheduled_maintenance"] = notify
     row = await create_event(conn, payload)
 
     # Optional maintenance_scheduled email (Machine Detail proactive schedule).
@@ -57,11 +61,11 @@ async def post_calendar_event(
             "alert_id":       row.get("event_id"),
             "machine_id":     row.get("machine_id"),
             "machine_name":   None,
-            "component_id":   component_id,
+            "component_id":   payload.get("component_id"),
             "component_name": None,
             "action_type":    "Scheduled maintenance",
             "scheduled_for":  row.get("event_date"),
-            "technician":     technician,
+            "technician":     payload.get("technician"),
             "priority":       priority,
             "notes":          row.get("notes"),
         }

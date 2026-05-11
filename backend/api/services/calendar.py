@@ -56,14 +56,17 @@ async def create_event(conn: asyncpg.Connection, body: dict) -> dict:
         """
         INSERT INTO calendar_events_custom (
             event_id, title, event_date, event_time, duration_minutes,
-            machine_id, event_type, notes, created_by
+            machine_id, event_type, notes, created_by,
+            is_scheduled_maintenance, component_id, technician
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
         RETURNING *
         """,
         event_id, body["title"], body["event_date"], body.get("event_time"),
         body.get("duration_minutes"), body.get("machine_id"),
         body["event_type"], body.get("notes"), body.get("created_by"),
+        bool(body.get("is_scheduled_maintenance")),
+        body.get("component_id"), body.get("technician"),
     )
     return _row_to_event(row)
 
@@ -322,7 +325,8 @@ async def _query_custom(pool: asyncpg.Pool, start: date, end: date) -> list[dict
         rows = await conn.fetch(
             """
             SELECT event_id, title, event_date, event_time, duration_minutes,
-                   machine_id, event_type, notes
+                   machine_id, event_type, notes,
+                   is_scheduled_maintenance, component_id, technician
             FROM calendar_events_custom
             WHERE event_date BETWEEN $1 AND $2
             ORDER BY event_date ASC
@@ -332,17 +336,35 @@ async def _query_custom(pool: asyncpg.Pool, start: date, end: date) -> list[dict
         )
     out = []
     for r in rows:
-        out.append({
-            "source":           "custom",
-            "id":               r["event_id"],
-            "date":             r["event_date"].isoformat(),
-            "title":            r["title"],
-            "machine_id":       r["machine_id"],
-            "event_type":       r["event_type"],
-            "event_time":       _time_iso(r["event_time"]),
-            "duration_minutes": r["duration_minutes"],
-            "notes":            r["notes"],
-        })
+        # Rows flagged is_scheduled_maintenance=TRUE come from the Machine
+        # Detail "Schedule Maintenance" button and surface as the same
+        # source='scheduled_maintenance' bucket the alert-page flow uses, so
+        # the UI renders the orange "Scheduled maintenance" badge instead of
+        # the gray "Custom event" badge. Genuine custom events (meetings,
+        # training, audits, …) keep source='custom'.
+        if r["is_scheduled_maintenance"]:
+            out.append({
+                "source":     "scheduled_maintenance",
+                "id":         r["event_id"],
+                "date":       r["event_date"].isoformat(),
+                "title":      r["title"],
+                "machine_id": r["machine_id"],
+                "component_id": r["component_id"],
+                "technician": r["technician"],
+                "notes":      r["notes"],
+            })
+        else:
+            out.append({
+                "source":           "custom",
+                "id":               r["event_id"],
+                "date":             r["event_date"].isoformat(),
+                "title":            r["title"],
+                "machine_id":       r["machine_id"],
+                "event_type":       r["event_type"],
+                "event_time":       _time_iso(r["event_time"]),
+                "duration_minutes": r["duration_minutes"],
+                "notes":            r["notes"],
+            })
     return out
 
 
