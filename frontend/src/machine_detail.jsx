@@ -78,7 +78,7 @@ const PREDICTED_FAILURE_BLURB = {
   "al-snobar:yankee":    { sub: "Idle",           blurb: "Will reassess once machine restarts" },
 };
 
-function PredictedFailurePanel({ machineId, topPrediction, hot }) {
+function PredictedFailurePanel({ machineId, topPrediction, hot, onSchedule }) {
   if (!topPrediction) return <PanelShell />;
   const compName = COMPONENT_LABEL[topPrediction.component_id] || topPrediction.component_id;
   const pct = Math.round(topPrediction.failure_probability * 100);
@@ -106,8 +106,7 @@ function PredictedFailurePanel({ machineId, topPrediction, hot }) {
       </div>
       {hot && (
         <button style={{ ...primaryBtn, marginTop: 16 }}
-          onClick={() => window.dispatchEvent(new CustomEvent("fhh:chat:send",
-            { detail: "Help me schedule maintenance for this machine" }))}>
+          onClick={() => onSchedule && onSchedule(topPrediction.component_id)}>
           Schedule Maintenance
         </button>
       )}
@@ -281,7 +280,7 @@ function ContributingSensorsCard({ sensors }) {
   );
 }
 
-function RecommendedActionCard({ component, risk }) {
+function RecommendedActionCard({ component, risk, onSchedule, onAcknowledge, canAcknowledge }) {
   if (!component || !risk) return null;
   const tier = component.risk_tier;
   const isHot = tier === "critical" || tier === "warning";
@@ -302,13 +301,13 @@ function RecommendedActionCard({ component, risk }) {
       {(isHot || isWarm) && (
         <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
           <button style={primaryBtn}
-            onClick={() => window.dispatchEvent(new CustomEvent("fhh:chat:send",
-              { detail: `Help me schedule maintenance for ${COMPONENT_LABEL[component.component_id]} on this machine` }))}
+            onClick={() => onSchedule && onSchedule(component.component_id)}
           >Schedule Maintenance</button>
-          <button style={secondaryBtn}
-            onClick={() => window.dispatchEvent(new CustomEvent("fhh:chat:send",
-              { detail: `Acknowledge the active alert on ${COMPONENT_LABEL[component.component_id]}` }))}
-          >Acknowledge Alert</button>
+          {canAcknowledge && (
+            <button style={secondaryBtn}
+              onClick={() => onAcknowledge && onAcknowledge(component.component_id)}
+            >Acknowledge Alert</button>
+          )}
         </div>
       )}
     </div>
@@ -619,6 +618,22 @@ function PanelShell() {
   return <div style={{ ...panelShell, height: 200, background: "#F4F6FA" }} />;
 }
 
+// Build a synthetic alert object that ScheduleModal will accept. ScheduleModal
+// reads MACHINE_NAMES[alert.machine_id] and COMPONENT_LABEL_ALERTS[alert.component_id]
+// from its own closure (alerts.jsx), so we only need to supply ids + a title
+// that's shown as a small subline in the modal header.
+function _buildSyntheticAlert(machineId, componentId, machineName) {
+  const compLabel = COMPONENT_LABEL[componentId] || componentId || "machine";
+  return {
+    alert_id: `synthetic-${machineId}-${componentId || "machine"}-${Date.now()}`,
+    machine_id: machineId,
+    component_id: componentId || null,
+    title: `Proactive maintenance on ${machineName || machineId}${componentId ? ` — ${compLabel}` : ""}`,
+    recommended_action: "Operator-initiated maintenance",
+    severity: "info",
+  };
+}
+
 // ────────────────────────────── Screen ──────────────────────────────
 function MachineDetailScreen({ machineId, onBack, onSelectComponent }) {
   const [machine, setMachine] = useStateMd(null);
@@ -629,6 +644,16 @@ function MachineDetailScreen({ machineId, onBack, onSelectComponent }) {
   const [maintLog, setMaintLog] = useStateMd(null);
   const [selectedComp, setSelectedComp] = useStateMd(null);
   const [compRisk, setCompRisk] = useStateMd(null);
+  // Active alerts for THIS machine, keyed by component_id (most-recent first).
+  // Drives the Acknowledge button's visibility on the per-component panel.
+  const [activeAlertsByComp, setActiveAlertsByComp] = useStateMd({});
+  const [scheduleFor, setScheduleFor] = useStateMd(null); // synthetic alert obj
+  const [toast, setToast] = useStateMd(null);
+
+  function showToast(msg) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2400);
+  }
 
   // Reload everything when machine changes — reset selection so the new
   // machine's highest-risk component takes the spotlight.
@@ -636,6 +661,7 @@ function MachineDetailScreen({ machineId, onBack, onSelectComponent }) {
     setMachine(null); setRisk(null); setComponents(null);
     setPredictions(null); setAlarms(null); setMaintLog(null);
     setSelectedComp(null); setCompRisk(null);
+    setActiveAlertsByComp({});
     window.api.get(`/machines/${machineId}`).then(setMachine);
     window.api.get(`/machines/${machineId}/risk-score`).then((r) => {
       setRisk(r);
@@ -646,7 +672,83 @@ function MachineDetailScreen({ machineId, onBack, onSelectComponent }) {
     window.api.get(`/machines/${machineId}/predictions`).then(setPredictions);
     window.api.get(`/machines/${machineId}/alarms`, { limit: 5 }).then((r) => setAlarms(r.alarms));
     window.api.get(`/machines/${machineId}/maintenance-log`).then((r) => setMaintLog(r.logs));
+    // Pull this machine's active alerts so the per-component panel can decide
+    // whether the Acknowledge button has anything to point at.
+    window.api
+      .get("/alerts", { machine_id: machineId, status: "active", group_by: "component" })
+      .then((r) => {
+        const byComp = {};
+        (r?.alerts || []).forEach((a) => {
+          if (!a.component_id) return;
+          (byComp[a.component_id] = byComp[a.component_id] || []).push(a);
+        });
+        setActiveAlertsByComp(byComp);
+      })
+      .catch(() => setActiveAlertsByComp({}));
   }, [machineId]);
+
+  function openSchedule(componentId) {
+    setScheduleFor(_buildSyntheticAlert(machineId, componentId, machine?.name));
+  }
+
+  async function handleScheduleSubmit({ date, tech, priority, notes }) {
+    const synth = scheduleFor;
+    setScheduleFor(null);
+    try {
+      const compLabel = COMPONENT_LABEL[synth.component_id] || synth.component_id;
+      const title = synth.component_id
+        ? `Maintenance: ${machine?.name || machineId} · ${compLabel}`
+        : `Maintenance: ${machine?.name || machineId}`;
+      await window.api.post("/calendar/events", {
+        title,
+        event_date: date,
+        machine_id: machineId,
+        event_type: "inspection",
+        notes: notes || null,
+        created_by: tech,
+        component_id: synth.component_id || null,
+        technician: tech,
+        priority: priority || "normal",
+        notify_maintenance: true,
+      });
+      showToast(`Maintenance scheduled for ${date}`);
+    } catch (e) {
+      const msg = e?.body?.error?.message || e?.message || "Failed to schedule.";
+      showToast("⚠ " + msg);
+    }
+  }
+
+  async function handleAcknowledge(componentId) {
+    const list = activeAlertsByComp[componentId] || [];
+    if (list.length === 0) {
+      showToast("No active alert on this component.");
+      return;
+    }
+    // Pick the most recent (group_by=component already aggregates events;
+    // latest_triggered_at is the freshest signal when present).
+    const ordered = list.slice().sort((a, b) => {
+      const ta = a.latest_triggered_at || a.created_at || "";
+      const tb = b.latest_triggered_at || b.created_at || "";
+      return tb.localeCompare(ta);
+    });
+    const target = ordered[0];
+    try {
+      await window.api.patch(`/alerts/${target.alert_id}/acknowledge`, {
+        acknowledged_by: "Operations Manager",
+      });
+      // Drop the acknowledged alert from the local map so the button hides.
+      setActiveAlertsByComp((prev) => {
+        const next = { ...prev };
+        next[componentId] = (next[componentId] || []).filter((a) => a.alert_id !== target.alert_id);
+        if (next[componentId].length === 0) delete next[componentId];
+        return next;
+      });
+      showToast("Alert acknowledged");
+    } catch (e) {
+      const msg = e?.body?.error?.message || e?.message || "Acknowledge failed.";
+      showToast("⚠ " + msg);
+    }
+  }
 
   useEffectMd(() => {
     if (!selectedComp) return;
@@ -718,6 +820,7 @@ function MachineDetailScreen({ machineId, onBack, onSelectComponent }) {
           machineId={machineId}
           topPrediction={topPrediction}
           hot={topPrediction && topPrediction.predicted_failure_window_hours != null}
+          onSchedule={(compId) => openSchedule(compId || risk?.highest_risk_component_id)}
         />
         <QuickStatsPanel
           machine={machine}
@@ -751,7 +854,13 @@ function MachineDetailScreen({ machineId, onBack, onSelectComponent }) {
         }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
             <WhatsWrongCard component={selectedComponent} risk={compRisk} />
-            <RecommendedActionCard component={selectedComponent} risk={compRisk} />
+            <RecommendedActionCard
+              component={selectedComponent}
+              risk={compRisk}
+              onSchedule={openSchedule}
+              onAcknowledge={handleAcknowledge}
+              canAcknowledge={(activeAlertsByComp[selectedComp] || []).length > 0}
+            />
             <RawSensorsSection componentId={selectedComp} machineId={machineId} />
           </div>
           <ContributingSensorsCard sensors={compRisk.top_contributing_sensors} />
@@ -772,6 +881,23 @@ function MachineDetailScreen({ machineId, onBack, onSelectComponent }) {
           components={components || []}
         />
       </div>
+
+      {scheduleFor && window.ScheduleModal && (
+        <window.ScheduleModal
+          alert={scheduleFor}
+          onClose={() => setScheduleFor(null)}
+          onSubmit={handleScheduleSubmit}
+        />
+      )}
+
+      {toast && (
+        <div style={{
+          position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)",
+          background: "#0A1F44", color: "white", padding: "10px 18px",
+          borderRadius: 999, fontSize: 13, fontWeight: 500,
+          boxShadow: "0 8px 24px rgba(10,31,68,0.25)", zIndex: 200,
+        }}>{toast}</div>
+      )}
     </div>
   );
 }

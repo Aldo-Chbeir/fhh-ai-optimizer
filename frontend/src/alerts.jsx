@@ -1396,4 +1396,6 @@ function ActivePill({ label, onRemove }) {
   );
 }
 
-Object.assign(window, { AlertsScreen });
+// ScheduleModal is also consumed by Machine Detail's "Schedule Maintenance"
+// buttons via a synthetic alert object — see machine_detail.jsx.
+Object.assign(window, { AlertsScreen, ScheduleModal });

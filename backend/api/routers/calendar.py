@@ -39,7 +39,36 @@ async def post_calendar_event(
     _validate_machine(body.machine_id)
     payload = body.model_dump()
     payload["event_type"] = payload["event_type"].value
+    notify = payload.pop("notify_maintenance", False)
+    component_id = payload.pop("component_id", None)
+    technician = payload.pop("technician", None)
+    priority = payload.pop("priority", None)
     row = await create_event(conn, payload)
+
+    # Optional maintenance_scheduled email (Machine Detail proactive schedule).
+    # Gated by EMAIL_TRIGGER_MAINT_SCHEDULED; failure here MUST NOT break the
+    # 201 response.
+    if notify:
+        import asyncio
+        from ..db import get_pool
+        from ..notifications.services import dispatch_maintenance_scheduled
+        scheduled_for_email = {
+            "id":             row.get("event_id"),
+            "alert_id":       row.get("event_id"),
+            "machine_id":     row.get("machine_id"),
+            "machine_name":   None,
+            "component_id":   component_id,
+            "component_name": None,
+            "action_type":    "Scheduled maintenance",
+            "scheduled_for":  row.get("event_date"),
+            "technician":     technician,
+            "priority":       priority,
+            "notes":          row.get("notes"),
+        }
+        asyncio.create_task(
+            dispatch_maintenance_scheduled(get_pool(), scheduled=scheduled_for_email)
+        )
+
     return CalendarEvent(**row)
 
 

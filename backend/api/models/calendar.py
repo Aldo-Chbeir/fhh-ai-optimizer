@@ -25,6 +25,14 @@ class CalendarEventCreate(BaseModel):
     event_type: CalendarEventType
     notes: Optional[str] = Field(default=None, max_length=2000)
     created_by: Optional[str] = Field(default=None, max_length=120)
+    # When True, POST /calendar/events also fires dispatch_maintenance_scheduled
+    # so EMAIL_TRIGGER_MAINT_SCHEDULED gets the same email as the Alerts-page
+    # schedule flow. Used by the Machine Detail "Schedule Maintenance" button
+    # which has no real alert_id to PATCH against. Not persisted.
+    notify_maintenance: bool = False
+    component_id: Optional[str] = Field(default=None, max_length=40)
+    technician: Optional[str] = Field(default=None, max_length=120)
+    priority: Optional[str] = Field(default=None, max_length=20)
 
 
 class CalendarEventUpdate(BaseModel):
