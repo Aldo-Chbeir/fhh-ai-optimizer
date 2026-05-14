@@ -425,8 +425,17 @@ function ConfidencePill({ confidencePct, mape, lastTrained }) {
 
 // ───────────── HERO CHART ─────────────
 function HeroChart({ history, forecast, scenarioForecast, events, horizonDays }) {
-  // History: keep last 365d. Forecast: cut to horizonDays.
-  const hist = useMemoD(() => history.slice(-365), [history]);
+  // Future-only window: the chart starts AT today's first forecast point
+  // and extends `horizonDays` forward. Historical actuals are deliberately
+  // omitted here — they live in their own chart (out of scope) and we
+  // want the main chart to be predictive-forward. Flip `pastDays` back
+  // to a positive number (e.g. Math.min(30, horizonDays/2)) to re-enable
+  // the previous "context + future" layout.
+  const pastDays = 0;
+  const hist = useMemoD(
+    () => (pastDays > 0 ? history.slice(-pastDays) : []),
+    [history, pastDays],
+  );
   const fcst = useMemoD(() => forecast.slice(0, horizonDays), [forecast, horizonDays]);
   const scen = useMemoD(() => scenarioForecast ? scenarioForecast.slice(0, horizonDays) : null, [scenarioForecast, horizonDays]);
 
@@ -480,11 +489,11 @@ function HeroChart({ history, forecast, scenarioForecast, events, horizonDays })
     return d;
   }, [hist, yMax]);
 
-  // forecast path (continues from last hist point)
+  // forecast path (continues from last hist point when history is shown,
+  // otherwise starts at the first forecast point)
   const fcstPath = useMemoD(() => {
     if (fcst.length === 0) return "";
     let d = "";
-    // bridge from last historical point so the line is continuous
     const lastH = hist[hist.length - 1];
     if (lastH) {
       const i0 = hist.length - 1;
@@ -493,7 +502,10 @@ function HeroChart({ history, forecast, scenarioForecast, events, horizonDays })
     fcst.forEach((p, i) => {
       const x = xAt(hist.length + i);
       const y = yAt(p.forecast_value);
-      d += " L " + x.toFixed(1) + " " + y.toFixed(1);
+      // First point must be a Move when there's no historical bridge,
+      // otherwise the SVG path is invalid and the line disappears.
+      const cmd = (d === "" && i === 0) ? "M " : " L ";
+      d += cmd + x.toFixed(1) + " " + y.toFixed(1);
     });
     return d;
   }, [hist, fcst, yMax]);
@@ -526,7 +538,9 @@ function HeroChart({ history, forecast, scenarioForecast, events, horizonDays })
       d += "M " + xAt(hist.length - 1).toFixed(1) + " " + yAt(histVal(lastH)).toFixed(1);
     }
     scen.forEach((p, i) => {
-      d += " L " + xAt(hist.length + i).toFixed(1) + " " + yAt(p.forecast_value).toFixed(1);
+      // Same M-on-first-point safeguard as fcstPath when history is empty.
+      const cmd = (d === "" && i === 0) ? "M " : " L ";
+      d += cmd + xAt(hist.length + i).toFixed(1) + " " + yAt(p.forecast_value).toFixed(1);
     });
     return d;
   }, [hist, scen, yMax]);
@@ -686,17 +700,26 @@ function HeroChart({ history, forecast, scenarioForecast, events, horizonDays })
           </text>
         ))}
 
-        {/* now line — between hist and forecast */}
-        {hist.length > 0 && (
-          <g>
-            <line x1={xAt(hist.length - 1)} x2={xAt(hist.length - 1)}
-              y1={padT} y2={padT + plotH}
-              stroke="#0A1F44" strokeOpacity="0.4" strokeDasharray="3 3" strokeWidth="1.2" />
-            <text x={xAt(hist.length - 1)} y={padT + 12} textAnchor="middle"
-              fontSize="10" fill="#0A1F44" fontWeight="600"
-              style={{ letterSpacing: 0.3, textTransform: "uppercase" }}>Today</text>
-          </g>
-        )}
+        {/* "Today" marker. With history shown it sits between hist and
+            forecast (xAt(hist.length - 1)). With history hidden the
+            forecast starts at today, so anchor the marker to xAt(0). */}
+        {(hist.length > 0 || fcst.length > 0) && (() => {
+          const todayIdx = hist.length > 0 ? hist.length - 1 : 0;
+          return (
+            <g>
+              <line x1={xAt(todayIdx)} x2={xAt(todayIdx)}
+                y1={padT} y2={padT + plotH}
+                stroke="#0A1F44" strokeOpacity="0.4" strokeDasharray="3 3" strokeWidth="1.2" />
+              <text
+                x={xAt(todayIdx)}
+                y={padT + 12}
+                textAnchor={hist.length === 0 ? "start" : "middle"}
+                fontSize="10" fill="#0A1F44" fontWeight="600"
+                style={{ letterSpacing: 0.3, textTransform: "uppercase" }}
+              >Today</text>
+            </g>
+          );
+        })()}
 
         {/* confidence band */}
         <path d={bandPath} fill="#F59E0B" fillOpacity="0.18" />
@@ -1713,10 +1736,28 @@ const modalPrimD = {
 
 // ───────────── COMPARE OVERLAY ─────────────
 function CompareOverlay({ open, onClose, baseSku, baseMarket, products }) {
-  const [otherMarket, setOtherMarket] = useStateD("ksa");
+  // Right-side default: a DIFFERENT market from the left, so the modal
+  // surfaces a meaningful comparison the moment it opens (previously it
+  // hardcoded "ksa", which collided when the user was already viewing
+  // KSA on the main page). UAE ↔ KSA is the strongest MENA contrast.
+  // Product defaults to whatever's on the left — SKU comparison is opt-in.
+  const _defaultOther = (mid) => (mid === "uae" ? "ksa" : "uae");
+  const [otherMarket, setOtherMarket] = useStateD(_defaultOther(baseMarket));
   const [otherSku, setOtherSku] = useStateD(baseSku);
   const [a, setA] = useStateD(null);
   const [b, setB] = useStateD(null);
+  // If the user changes the main-page market between modal opens, the
+  // sticky `otherMarket` from a previous mount could now equal the new
+  // baseMarket. Flip it back to a different market the next time the
+  // modal opens. We only act on the collision case so a deliberate
+  // user pick (e.g. otherMarket=uae against baseMarket=uae) survives
+  // until something changes.
+  useEffectD(() => {
+    if (!open) return;
+    if (otherMarket === baseMarket) {
+      setOtherMarket(_defaultOther(baseMarket));
+    }
+  }, [open, baseMarket]);
   useEffectD(() => {
     if (!open) return;
     window.api.get("/forecast", { sku: baseSku, market: baseMarket, horizon_months: 4 }).then(setA);
@@ -1768,6 +1809,70 @@ function CompareOverlay({ open, onClose, baseSku, baseMarket, products }) {
     </div>
   );
 }
+// Axis-aware mini chart used ONLY inside the Compare modal. Stand-alone
+// from `MiniLine` (which renders bare lines for decomposition cards and
+// other shape-only contexts that would be cluttered by ticks). Compare
+// is the one place users need to read specific values off the curve.
+function CompareMiniChart({ points, color, dashed }) {
+  if (!points || points.length === 0) return null;
+  const W = 480, H = 100;
+  const padL = 38, padR = 8, padT = 6, padB = 18;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  const vals = points.map((p) => p.forecast_value);
+  const minV = Math.min(...vals);
+  const maxV = Math.max(...vals);
+  const rangeV = (maxV - minV) || 1;
+
+  const xAt = (i) => padL + (i / Math.max(1, points.length - 1)) * plotW;
+  const yAt = (v) => padT + (1 - (v - minV) / rangeV) * plotH;
+
+  // 4 evenly-spaced Y ticks; fmtUnits renders "5K", "1.2M", etc.
+  const yTicks = [0, 1, 2, 3].map((k) => minV + (rangeV * k) / 3);
+
+  // X ticks at each month boundary (mirrors the main chart pattern so
+  // labels read as "May / Jun / Jul / Aug" — never duplicated).
+  const xTicks = [];
+  let prevMonth = null;
+  points.forEach((p, i) => {
+    const m = p.date.slice(0, 7);
+    if (m !== prevMonth) { xTicks.push({ idx: i, date: p.date }); prevMonth = m; }
+  });
+
+  const path = points
+    .map((p, i) =>
+      `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(1)} ${yAt(p.forecast_value).toFixed(1)}`
+    )
+    .join(" ");
+
+  return (
+    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`}
+      style={{ display: "block" }}>
+      {yTicks.map((v, k) => (
+        <g key={`y-${k}`}>
+          <line x1={padL} x2={W - padR} y1={yAt(v)} y2={yAt(v)}
+            stroke="#EEF1F6" strokeWidth="1" />
+          <text x={padL - 6} y={yAt(v) + 3} textAnchor="end"
+            fontSize="10" fill="#9CA3AF"
+            style={{ fontVariantNumeric: "tabular-nums" }}>
+            {fmtUnits(v)}
+          </text>
+        </g>
+      ))}
+      {xTicks.map((t, k) => (
+        <text key={`x-${k}`} x={xAt(t.idx)} y={H - padB + 12}
+          fontSize="10" fill="#9CA3AF" textAnchor="middle">
+          {new Date(t.date).toLocaleDateString("en-GB", { month: "short" })}
+        </text>
+      ))}
+      <path d={path} fill="none" stroke={color} strokeWidth="1.8"
+        strokeLinejoin="round"
+        strokeDasharray={dashed ? "4 4" : undefined} />
+    </svg>
+  );
+}
+
 function CompareSide({ title, sub, forecast, accent }) {
   if (!forecast) return <div style={{ height: 200, background: "#F4F6FA", borderRadius: 8 }} />;
   const total = forecast.reduce((s, p) => s + p.forecast_value, 0);
@@ -1779,7 +1884,7 @@ function CompareSide({ title, sub, forecast, accent }) {
       </div>
       <div style={{ fontSize: 15, fontWeight: 600, color: "#0A1F44", marginTop: 2 }}>{sub}</div>
       <div style={{ marginTop: 10, height: 100 }}>
-        <MiniLine values={forecast.map((p) => p.forecast_value)} color={accent} h={100} dashed />
+        <CompareMiniChart points={forecast} color={accent} dashed />
       </div>
       <div style={{ display: "flex", gap: 16, marginTop: 8 }}>
         <div>
@@ -2199,16 +2304,6 @@ function DemandForecastScreen({ onNavigate }) {
               cursor: "pointer", fontFamily: "inherit",
             }}
           >📦 Schedule Order</button>
-          <button
-            onClick={() => setScenarioOpen(!scenarioOpen)}
-            style={{
-              padding: "8px 14px", borderRadius: 8,
-              border: scenarioOpen ? "1px solid #06B6D4" : "1px solid #DCE2EC",
-              background: scenarioOpen ? "#ECFEFF" : "white",
-              color: "#0A1F44", fontSize: 12.5, fontWeight: 600,
-              cursor: "pointer", fontFamily: "inherit",
-            }}
-          >🧪 Scenario</button>
           <div style={{ flex: 1 }} />
           {forecastData && (
             <ConfidencePill confidencePct={forecastData.accuracy.forecast_confidence_percent}
@@ -2244,7 +2339,6 @@ function DemandForecastScreen({ onNavigate }) {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-            <Legend swatch={<svg width="22" height="6"><line x1="0" x2="22" y1="3" y2="3" stroke="#0A1F44" strokeWidth="2" /></svg>} label="Historical actuals" />
             <Legend swatch={<svg width="22" height="6"><line x1="0" x2="22" y1="3" y2="3" stroke="#E66A12" strokeWidth="2" strokeDasharray="4 3" /></svg>} label="Forecast" />
             <Legend swatch={<span style={{ width: 14, height: 10, background: "#8B5CF6", opacity: 0.4, borderRadius: 2, display: "inline-block" }} />} label="Ramadan" />
             <Legend swatch={<span style={{ width: 14, height: 10, background: "#F59E0B", opacity: 0.5, borderRadius: 2, display: "inline-block" }} />} label="Eid Al-Fitr" />
