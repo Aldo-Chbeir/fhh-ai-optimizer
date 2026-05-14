@@ -2,8 +2,8 @@
 // Every component pulls from a /kpis/overview, /alerts, or /machines call —
 // data wiring is shown in the console. Fields used (verbatim from contract):
 //   /kpis/overview → fleet_avg_oee_percent, active_critical_alerts,
-//                    active_warning_alerts, estimated_cost_saved_usd_mtd,
-//                    machines_running, machines_total, last_updated
+//                    active_warning_alerts, machines_running,
+//                    machines_total, last_updated
 //   /alerts (severity=critical) → alerts[].title, machine_id, component_id,
 //                    risk_score, predicted_failure_window_hours
 //   /machines → machines[].machine_id, name, location, status,
@@ -57,7 +57,7 @@ function KpiTile({ label, value, sub, accent }) {
 function KpiStrip({ kpis }) {
   if (!kpis) return <div style={{ height: 132 }} />;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
       <KpiTile
         label="Fleet Avg OEE"
         value={kpis.fleet_avg_oee_percent.toFixed(1) + "%"}
@@ -74,12 +74,6 @@ function KpiStrip({ kpis }) {
         value={kpis.active_warning_alerts}
         accent={kpis.active_warning_alerts > 0 ? "#E66A12" : "#0A1F44"}
         sub="ML risk 50–69 — schedule within 7 days"
-      />
-      <KpiTile
-        label="Cost Saved · MTD"
-        value={formatUsdCompact(kpis.estimated_cost_saved_usd_mtd)}
-        accent="#0F8B5C"
-        sub={`${kpis.predicted_downtime_prevented_hours_mtd}h downtime prevented`}
       />
     </div>
   );
