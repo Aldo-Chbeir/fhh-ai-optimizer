@@ -6,6 +6,7 @@ import asyncpg
 from ..db import get_conn
 from ..errors import MachineNotFound
 from ..models import Machine, MachineList
+from ..services.alerts import count_active_buckets_for_machine
 from ..services.constants import VALID_MACHINE_IDS
 from ..services.risk import machine_risk
 
@@ -25,13 +26,10 @@ async def _machine_object(conn: asyncpg.Connection, machine_id: str) -> dict:
     if row is None:
         raise MachineNotFound(machine_id)
     score, tier, _ = await machine_risk(conn, machine_id)
-    active = await conn.fetchval(
-        """
-        SELECT COUNT(*) FROM alarm_events
-        WHERE machine_id = $1 AND resolved_at IS NULL
-        """,
-        machine_id,
-    ) or 0
+    # F2-cleaned bucket count — must equal the "Active" tab on the
+    # Alerts page when filtered to this machine. See
+    # services.alerts.count_active_buckets_for_machine for rationale.
+    active = await count_active_buckets_for_machine(conn, machine_id)
     return {
         "machine_id": row["machine_id"],
         "name": row["name"],

@@ -196,6 +196,32 @@ async def warm_risk_cache(pool: "asyncpg.Pool") -> int:
     return sum(1 for r in results if not isinstance(r, BaseException))
 
 
+async def count_active_buckets_for_machine(
+    conn: asyncpg.Connection, machine_id: str,
+) -> int:
+    """Count of grouped (component) buckets for `machine_id` whose
+    collapsed bucket status is 'active' — i.e. the same number shown by
+    the "Active" tab on the Alerts page when filtered to this machine.
+
+    Source of truth for both the Overview machine-card "N active alerts"
+    pill and the chatbot's `list_machines` tool. Pre-F2 these places
+    used raw `COUNT(*) FROM alarm_events WHERE resolved_at IS NULL`,
+    which inflated the count with stale rows, informational recovery
+    messages, and rows the operator had already acknowledged/scheduled —
+    so the same machine showed "23 active alerts" on Overview but "4"
+    on the Alerts page. This helper applies the F2 grouping + bucket-
+    status precedence so both surfaces agree exactly.
+    """
+    alerts, _ = await list_alerts(
+        conn, machine_id=machine_id, include_resolved=True,
+    )
+    grouped = group_alerts_by_component(alerts)
+    return sum(
+        1 for g in grouped
+        if (g.get("_status") or g.get("status") or "active") == "active"
+    )
+
+
 async def list_alerts(
     conn: asyncpg.Connection,
     severity: Optional[str] = None,

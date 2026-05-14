@@ -359,11 +359,10 @@ async def _machine_summary(conn: asyncpg.Connection, machine_id: str) -> dict:
     if row is None:
         raise ValueError(f"unknown machine_id '{machine_id}'")
     score, tier, worst = await _risk_machine(conn, machine_id)
-    active = await conn.fetchval(
-        "SELECT COUNT(*) FROM alarm_events "
-        "WHERE machine_id = $1 AND resolved_at IS NULL",
-        machine_id,
-    ) or 0
+    # Match what the user sees on the Overview cards + Alerts page —
+    # F2-grouped + bucket-status precedence, not raw alarm rows.
+    from .alerts import count_active_buckets_for_machine
+    active = await count_active_buckets_for_machine(conn, machine_id)
     return {
         "machine_id": row["machine_id"],
         "name": row["name"],
