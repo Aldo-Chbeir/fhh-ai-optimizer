@@ -280,13 +280,27 @@ function ContributingSensorsCard({ sensors }) {
   );
 }
 
+// Recommendation text + accent colour are derived from the SELECTED
+// component's live ML score (via /machines/{id}/components/{cid}/risk-score),
+// not from the machine-card `component.risk_tier` snapshot — that snapshot
+// is the machine-level rollup and stays stale while you click between
+// components. Tier thresholds match the rest of the dashboard
+// (tier_for / Critical Machines KPI / alert severity badges).
+function _recommendationFor(score) {
+  if (score == null)   return { tier: "healthy",  text: "Continue monitoring. No action required." };
+  if (score >= 70)     return { tier: "critical", text: "Schedule maintenance within 48h — predicted failure imminent." };
+  if (score >= 50)     return { tier: "warning",  text: "Schedule preventive maintenance within 7 days." };
+  if (score >= 30)     return { tier: "watch",    text: "Monitor closely. No immediate action." };
+  return                      { tier: "healthy",  text: "Continue monitoring. No action required." };
+}
+
 function RecommendedActionCard({ component, risk, onSchedule, onAcknowledge, canAcknowledge }) {
   if (!component || !risk) return null;
-  const tier = component.risk_tier;
-  const isHot = tier === "critical" || tier === "warning";
-  const isWarm = tier === "watch";
+  const rec = _recommendationFor(risk.score);
+  const isHot = rec.tier === "critical" || rec.tier === "warning";
+  const isWarm = rec.tier === "watch";
   const accent = isHot ? "#D7263D" : isWarm ? "#E66A12" : "#15A56C";
-  const body = risk._recommendation || "Continue monitoring. No action required.";
+  const body = rec.text;
   return (
     <div style={{
       borderRadius: 10,
