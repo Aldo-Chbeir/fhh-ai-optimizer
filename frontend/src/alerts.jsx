@@ -124,20 +124,20 @@ function AlertsKpiStrip({ kpis }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
       <KpiCard
-        label="Critical Alerts"
+        label="Critical Machines"
         value={kpis.active_critical}
         accent={kpis.active_critical > 0 ? "#D7263D" : "#0A1F44"}
         sparkline={kpis.critical_sparkline_7d}
         sparkColor="#D7263D"
-        sub="Active · last 7 days trend"
+        sub="ML risk ≥ 70 · 7-day alarm trend"
       />
       <KpiCard
-        label="Warning Alerts"
+        label="Warning Machines"
         value={kpis.active_warning}
         accent={kpis.active_warning > 0 ? "#E66A12" : "#0A1F44"}
         sparkline={kpis.warning_sparkline_7d}
         sparkColor="#E66A12"
-        sub="Active · last 7 days trend"
+        sub="ML risk 50–69 · 7-day alarm trend"
       />
       <KpiCard
         label="Avg Response Time"
@@ -889,7 +889,7 @@ function EmptyState({ onClear }) {
 }
 
 // ───────────── screen ─────────────
-function AlertsScreen({ onOpenMachine }) {
+function AlertsScreen({ onOpenMachine, initialMachineFilter }) {
   const [kpis, setKpis] = useStateAlerts(null);
   const [allAlerts, setAllAlerts] = useStateAlerts(null);
   // Default to "All" so the page surfaces every state — including
@@ -898,7 +898,14 @@ function AlertsScreen({ onOpenMachine }) {
   // Active tab. Operators can still pivot to Active for triage focus.
   const [tab, setTab] = useStateAlerts("all");
   const [search, setSearch] = useStateAlerts("");
-  const [machineFilter, setMachineFilter] = useStateAlerts([]);
+  // `initialMachineFilter` is set by App when the user clicks "View all →"
+  // on the RecentAlarmsPanel of a Machine Detail page, so Alerts opens
+  // pre-filtered to that machine. The prop is only consulted on mount —
+  // TopNav navigation unmounts AlertsScreen, so coming back via the top
+  // nav always lands on an empty filter (the prop is null then).
+  const [machineFilter, setMachineFilter] = useStateAlerts(
+    Array.isArray(initialMachineFilter) ? initialMachineFilter : []
+  );
   const [sevFilter, setSevFilter] = useStateAlerts([]);
   const [compFilter, setCompFilter] = useStateAlerts([]);
   const [sort, setSort] = useStateAlerts("created_at_desc");

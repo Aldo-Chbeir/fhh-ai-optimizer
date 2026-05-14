@@ -290,6 +290,66 @@ async def get_active_warning_alerts(pool: asyncpg.Pool) -> list[dict]:
     return await _get_active_alerts_by_severity(pool, "warning")
 
 
+async def get_critical_machines_digest(pool: asyncpg.Pool) -> list[dict]:
+    """For the login digest: every machine whose current ML risk score
+    is in the *critical* tier (≥ 70 per `tier_for`). Per-machine we surface
+    the highest-risk component (id + display name), the integer score, and
+    that component's predicted failure window (hours). Sorted desc by score
+    so the most-critical machine renders first.
+
+    Fires on every successful POST /auth/login. The 4 × 6 = 24 ML
+    inference calls live behind asyncio.create_task in the router, so the
+    cost never lands on the login response. An empty return value is the
+    signal to send no email at all (silence is fine — never send an "all
+    clear" digest).
+    """
+    # Local imports keep this module importable when ml/ artifacts are
+    # missing (e.g. fresh checkout before training).
+    from ..services.constants import COMPONENT_ORDER, VALID_MACHINE_IDS, tier_for
+    from ..services.risk import component_risk
+
+    out: list[dict] = []
+    async with pool.acquire() as conn:
+        for machine_id in sorted(VALID_MACHINE_IDS):
+            worst_score = -1
+            worst_comp: Optional[str] = None
+            worst_window: Optional[int] = None
+            for cid in COMPONENT_ORDER:
+                score, _tier, window = await component_risk(conn, machine_id, cid)
+                if score > worst_score:
+                    worst_score = score
+                    worst_comp = cid
+                    worst_window = window
+
+            if tier_for(worst_score) != "critical":
+                continue
+
+            machine_name = await conn.fetchval(
+                "SELECT name FROM machines WHERE machine_id = $1", machine_id,
+            ) or machine_id
+            comp_name = None
+            if worst_comp:
+                comp_name = await conn.fetchval(
+                    """
+                    SELECT name FROM components
+                    WHERE machine_id = $1 AND component_id = $2
+                    """,
+                    machine_id, worst_comp,
+                ) or worst_comp
+
+            out.append({
+                "machine_id":     machine_id,
+                "machine_name":   machine_name,
+                "score":          int(worst_score),
+                "tier":           tier_for(worst_score),
+                "component_id":   worst_comp,
+                "component_name": comp_name,
+                "predicted_failure_window_hours": worst_window,
+            })
+    out.sort(key=lambda m: m["score"], reverse=True)
+    return out
+
+
 async def get_machine_name(pool: asyncpg.Pool, machine_id: str) -> Optional[str]:
     """Lookup the display name for a machine_id — used by maint/order
     dispatchers so emails show 'Al Nakheel' rather than 'al-nakheel'."""
@@ -332,22 +392,38 @@ async def _dispatch_safe(label: str, coro) -> None:
 async def dispatch_login(
     pool: asyncpg.Pool, *, user: dict, login_time: datetime,
 ) -> None:
-    """Fires both the login email AND (if its toggle is on) the fleet
-    digest. They share the same trigger event but different toggles so an
-    operator can pick 'I want login pings' OR 'I want digest only' or both."""
+    """Login-triggered critical-machines digest.
+
+    On every successful sign-in (regardless of WHICH user just logged in)
+    we query the live ML risk score for every machine, filter to those in
+    the critical tier, and — IF at least one machine is critical — email
+    the full NOTIFICATION_RECIPIENTS list a single digest naming each one.
+    If no machine is critical, no email is sent (silence is fine; never
+    send an "all clear" digest).
+
+    The legacy fleet_digest branch is preserved but gated off via
+    EMAIL_TRIGGER_FLEET_DIGEST=false — leaving it in place keeps the
+    audit log + re-enable path intact without firing now.
+    """
     if trigger_enabled("login"):
-        async def _login():
-            fleet_summary = await get_fleet_alert_summary(pool)
-            subject, html_body, plain = templates.login_email(
-                user, login_time, fleet_summary,
-            )
+        async def _critical_digest():
+            machines = await get_critical_machines_digest(pool)
+            if not machines:
+                log.info(
+                    "login digest: no critical machines (>=70) — skipping email",
+                )
+                return
+            subject, html_body, plain = templates.critical_machines_digest_email(machines)
             await send_email(
-                pool, notification_type="test",  # no dedicated enum value — log under 'test'
-                source_id=f"login:{user['id']}:{login_time.isoformat()}",
+                pool, notification_type="alert_critical",
+                # Per-login source_id keeps each sign-in distinct in the
+                # dedupe table (so Aldo + Gebrane both receive every login).
+                source_id=f"login_digest:{user['id']}:{login_time.isoformat()}",
                 subject=subject, html=html_body, plain=plain,
             )
-        await _dispatch_safe("login", _login())
+        await _dispatch_safe("login", _critical_digest())
 
+    # Legacy: fleet alert digest. Gated off via EMAIL_TRIGGER_FLEET_DIGEST.
     if trigger_enabled("fleet_digest"):
         async def _digest():
             crit = await get_active_critical_alerts(pool)

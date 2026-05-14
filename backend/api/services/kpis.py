@@ -7,7 +7,7 @@ from typing import Optional
 import asyncpg
 
 from .constants import COMPONENT_ORDER, tier_for
-from .risk import component_risk
+from .risk import component_risk, machine_risk
 
 _FIXED_SAVINGS_BY_MACHINE = {
     "al-nakheel": 480_000,
@@ -26,19 +26,24 @@ async def overview(conn: asyncpg.Connection) -> dict:
         "SELECT COUNT(*) FROM machines WHERE status = 'running'"
     ) or 0
 
-    # Critical / warning unresolved alarms
-    critical = await conn.fetchval(
-        """
-        SELECT COUNT(*) FROM alarm_events
-        WHERE severity = 'critical' AND resolved_at IS NULL
-        """,
-    ) or 0
-    warning = await conn.fetchval(
-        """
-        SELECT COUNT(*) FROM alarm_events
-        WHERE severity = 'warning' AND resolved_at IS NULL
-        """,
-    ) or 0
+    # Critical / warning MACHINE counts driven by the live ML risk score.
+    # Previously these tallied unresolved alarm_events rows — but the
+    # dashboard's notion of "critical" everywhere else (badges on the
+    # machine cards, the digest email, machine detail) is the ML tier
+    # (score ≥ 70). Counting alarm rows produced numbers that didn't
+    # match what a user could see on the screen. Now: one bump per
+    # machine whose worst component's ML tier is critical / warning.
+    machine_id_rows = await conn.fetch(
+        "SELECT machine_id FROM machines ORDER BY machine_id"
+    )
+    critical = 0
+    warning = 0
+    for row in machine_id_rows:
+        score, tier, _ = await machine_risk(conn, row["machine_id"])
+        if tier == "critical":
+            critical += 1
+        elif tier == "warning":
+            warning += 1
 
     # MTD downtime prevented & cost saved — rolled up from corrective + preventive
     # maintenance logs in the current calendar month. (Heuristic scaling.)

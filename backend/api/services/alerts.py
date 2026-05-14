@@ -338,6 +338,64 @@ async def list_alerts(
 # Group-by-component aggregation (Phase F2)
 # ---------------------------------------------------------------------------
 
+# Precedence for collapsing a bucket's many event statuses down to one
+# "group status" that drives the StatusTabs counts on the Alerts page.
+# Order: any triage action (scheduled / acknowledged / snoozed) wins
+# over raw `active` (because the operator already worked the bucket);
+# `active` wins over `resolved` (a single still-open alarm keeps the
+# bucket open). Only when EVERY event is resolved does the bucket read
+# as resolved.
+#
+# Without this, the head-event sort below picks the highest-severity
+# event for the headline and inherits that one event's status — which
+# made every bucket look "resolved" whenever a long-resolved critical
+# alarm dominated the severity sort, even though newer active rows for
+# the same component existed in the DB.
+_GROUP_STATUS_PRIORITY = {
+    "scheduled":    0,
+    "acknowledged": 1,
+    "snoozed":      2,
+    "active":       3,
+    "resolved":     4,
+}
+
+
+def _bucket_status(events: list[dict]) -> str:
+    best = "active"
+    best_rank = 999
+    for e in events:
+        s = e.get("_status") or e.get("status") or "active"
+        rank = _GROUP_STATUS_PRIORITY.get(s, 999)
+        if rank < best_rank:
+            best_rank = rank
+            best = s
+    return best
+
+
+def _bucket_status_event(events: list[dict], bucket_status: str) -> Optional[dict]:
+    """Pick the most recently status-changed event whose status matches
+    the bucket's collapsed status — so the grouped row carries the right
+    status_changed_at / status_changed_by / status_metadata (e.g. the
+    scheduled_date + technician for a scheduled bucket)."""
+    matches = [
+        e for e in events
+        if (e.get("_status") or e.get("status") or "active") == bucket_status
+    ]
+    if not matches:
+        return None
+    def _key(e):
+        ts = e.get("status_changed_at") or e.get("timestamp")
+        if isinstance(ts, str):
+            try:
+                return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except ValueError:
+                return datetime.min.replace(tzinfo=timezone.utc)
+        if isinstance(ts, datetime):
+            return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return max(matches, key=_key)
+
+
 def group_alerts_by_component(alerts: list[dict]) -> list[dict]:
     """Bucket per-row alerts by (machine_id, component_id) and emit one
     grouped row per bucket.
@@ -416,6 +474,10 @@ def group_alerts_by_component(alerts: list[dict]) -> list[dict]:
 
         all_informational = all(e.get("is_informational", False) for e in events)
 
+        # Collapsed bucket status + its source event (for status_metadata).
+        _bucket_st = _bucket_status(events)
+        _st_evt = _bucket_status_event(events, _bucket_st)
+
         grouped.append({
             "alert_id":          head["alert_id"],
             "machine_id":        machine_id,
@@ -439,15 +501,17 @@ def group_alerts_by_component(alerts: list[dict]) -> list[dict]:
             "alarm_ids":           [u["alarm_id"] for u in underlying],
             "underlying_events":   underlying,
             "is_informational":    all_informational,
-            # Pass through status fields from the headline event so triage
-            # buttons (Acknowledge / Schedule) target the most-severe
-            # underlying alarm — that's the one the operator cares about.
-            "status":              head.get("status", "active"),
-            "status_changed_at":   head.get("status_changed_at"),
-            "status_changed_by":   head.get("status_changed_by"),
-            "status_metadata":     head.get("status_metadata") or {},
-            "_status":             head.get("_status"),
-            "acknowledged":        head.get("acknowledged", False),
+            # Status fields are collapsed across the WHOLE bucket via the
+            # precedence rule (scheduled > acknowledged > snoozed > active
+            # > resolved), not pulled from the head. That way one old
+            # resolved critical alarm can't drag a still-active bucket
+            # into the Resolved tab.
+            "status":              _bucket_st,
+            "status_changed_at":   (_st_evt.get("status_changed_at") if _st_evt else None),
+            "status_changed_by":   (_st_evt.get("status_changed_by") if _st_evt else None),
+            "status_metadata":     (_st_evt.get("status_metadata") if _st_evt else {}) or {},
+            "_status":             _bucket_st,
+            "acknowledged":        _bucket_st in ("acknowledged", "scheduled", "snoozed", "resolved"),
             "created_at":          _iso(first_ts) if first_ts else head.get("created_at"),
         })
 

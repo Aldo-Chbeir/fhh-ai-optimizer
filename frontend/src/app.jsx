@@ -124,6 +124,11 @@ function App() {
   const [page, setPage] = useStateApp("overview");
   const [currentMachine, setCurrentMachine] = useStateApp(null);
   const [currentComponent, setCurrentComponent] = useStateApp(null);
+  // Set when a deep-link from Machine Detail ("View all →" on Recent
+  // Alarms) needs the Alerts screen to mount pre-filtered to a machine.
+  // Cleared whenever TopNav switches pages, so coming back to Alerts via
+  // the top nav always opens with no filter.
+  const [alertsPrefill, setAlertsPrefill] = useStateApp(null);
   const [kpiSummary, setKpiSummary] = useStateApp(null);
   const [chatCollapsed, setChatCollapsed] = useStateApp(false);
   // Hydrate from localStorage so a refreshed tab stays signed-in. Token
@@ -173,7 +178,7 @@ function App() {
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#F4F6FA" }}>
       <TopNav
         active={page === "machine_detail" ? "overview" : page}
-        onNavigate={(p) => { setPage(p); setCurrentMachine(null); setCurrentComponent(null); }}
+        onNavigate={(p) => { setPage(p); setCurrentMachine(null); setCurrentComponent(null); setAlertsPrefill(null); }}
         kpiSummary={kpiSummary}
         currentUser={currentUser}
         onLogout={handleLogout}
@@ -204,16 +209,18 @@ function App() {
               machineId={currentMachine || "al-nakheel"}
               onBack={() => { setPage("overview"); setCurrentMachine(null); setCurrentComponent(null); }}
               onSelectComponent={(cid) => setCurrentComponent(cid)}
+              onViewAllAlerts={(mid) => { setAlertsPrefill(mid); setPage("alerts"); }}
             />
           )}
           {page === "alerts" && (
             <AlertsScreen
               onOpenMachine={(id) => { setCurrentMachine(id); setPage("machine_detail"); }}
+              initialMachineFilter={alertsPrefill ? [alertsPrefill] : null}
             />
           )}
           {page === "demand_forecast" && (
             <DemandForecastScreen
-              onNavigate={(p) => { setPage(p); setCurrentMachine(null); setCurrentComponent(null); }}
+              onNavigate={(p) => { setPage(p); setCurrentMachine(null); setCurrentComponent(null); setAlertsPrefill(null); }}
             />
           )}
           {page === "calendar" && <CalendarScreen />}

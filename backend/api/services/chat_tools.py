@@ -251,8 +251,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "get_fleet_kpis",
         "description": (
             "Fleet-wide KPIs the user sees on the Overview screen: "
-            "fleet_avg_oee_percent, active_critical_alerts, "
-            "active_warning_alerts, predicted_downtime_prevented_hours_mtd, "
+            "fleet_avg_oee_percent, active_critical_alerts (count of "
+            "MACHINES in the critical ML tier, score ≥ 70 — NOT a row "
+            "count from alarm_events), active_warning_alerts (machines "
+            "in the warning ML tier, 50–69), "
+            "predicted_downtime_prevented_hours_mtd, "
             "estimated_cost_saved_usd_mtd, machines_running, machines_total."
         ),
         "input_schema": {"type": "object", "properties": {}},

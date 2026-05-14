@@ -5,6 +5,10 @@ from pydantic import BaseModel
 
 class KPIOverview(BaseModel):
     fleet_avg_oee_percent: float
+    # `active_critical_alerts` / `active_warning_alerts` are now counts of
+    # MACHINES whose worst component is in the corresponding ML tier
+    # (critical ≥70, warning 50-69), not alarm-row counts. Field name kept
+    # for API back-compat with the frontend KPI tiles.
     active_critical_alerts: int
     active_warning_alerts: int
     predicted_downtime_prevented_hours_mtd: float

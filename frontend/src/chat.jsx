@@ -100,19 +100,42 @@ function UserBubble({ text }) {
   );
 }
 
+// The assistant emits markdown (bold key numbers, bullet lists, the
+// occasional table). We parse it with `marked` and sanitize the result
+// with DOMPurify before handing it to dangerouslySetInnerHTML — the
+// libraries are loaded as classic UMD scripts in index.html, so both
+// are reachable as window.marked / window.DOMPurify.
+function renderAssistantHTML(md) {
+  if (!md) return "";
+  try {
+    const raw = window.marked
+      ? window.marked.parse(md, { gfm: true, breaks: true })
+      : md;
+    return window.DOMPurify ? window.DOMPurify.sanitize(raw) : raw;
+  } catch (e) {
+    return md;
+  }
+}
+
 function AssistantBubble({ msg, onFollowup }) {
+  const html = renderAssistantHTML(msg.content);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
-      <div style={{
-        maxWidth: "92%",
-        background: "#F4F6FA",
-        color: "#1A2438",
-        padding: "10px 14px",
-        borderRadius: "14px 14px 14px 4px",
-        fontSize: 13.5, lineHeight: 1.55,
-        whiteSpace: "pre-wrap", wordBreak: "break-word",
-      }}>
-        {msg.content || <em style={{ color: "#6B7280" }}>thinking…</em>}
+      <div
+        className="fhh-chat-md"
+        style={{
+          maxWidth: "92%",
+          background: "#F4F6FA",
+          color: "#1A2438",
+          padding: "10px 14px",
+          borderRadius: "14px 14px 14px 4px",
+          fontSize: 13.5, lineHeight: 1.55,
+          wordBreak: "break-word",
+        }}
+      >
+        {msg.content
+          ? <div dangerouslySetInnerHTML={{ __html: html }} />
+          : <em style={{ color: "#6B7280" }}>thinking…</em>}
       </div>
 
       {msg.data_sources_used && msg.data_sources_used.length > 0 && (

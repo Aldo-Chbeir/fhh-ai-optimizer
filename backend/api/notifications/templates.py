@@ -224,6 +224,102 @@ def login_email(
 
 
 # ---------------------------------------------------------------------------
+# Critical-machines digest (login-triggered)
+#
+# Replaces the old per-user "welcome back" login email. Body is a compact
+# list of every machine currently in the critical tier (ML risk score ≥
+# the threshold enforced by services.get_critical_machines_digest).
+# Recipients are always the .env NOTIFICATION_RECIPIENTS list regardless
+# of who triggered the login. If `machines` is empty the caller MUST skip
+# the send entirely — this template assumes at least one entry.
+# ---------------------------------------------------------------------------
+
+def critical_machines_digest_email(
+    machines: list[dict],
+) -> tuple[str, str, str]:
+    n = len(machines)
+    label = "machine" if n == 1 else "machines"
+    subject = f"[FHH] {n} critical {label} detected"
+
+    def _row(m: dict) -> str:
+        machine = html.escape(str(m.get("machine_name") or m.get("machine_id") or "?"))
+        comp = html.escape(str(m.get("component_name") or m.get("component_id") or ""))
+        score = m.get("score")
+        hours = m.get("predicted_failure_window_hours")
+
+        comp_chip = (
+            f'<span style="background:{GREY_BG};padding:2px 8px;border-radius:4px;'
+            f'font-size:11.5px;color:{INK_DIM};margin-left:8px;">{comp}</span>'
+        ) if comp else ""
+
+        score_html = (
+            f'<span style="font-size:20px;font-weight:700;color:{RED};">{int(score)}</span>'
+            f'<span style="font-size:11px;color:{INK_DIM};margin-left:4px;">/100</span>'
+        ) if score is not None else ''
+
+        hours_html = (
+            f'<div style="font-size:12px;color:{INK_SOFT};margin-top:6px;">'
+            f'Predicted failure window: <strong>{int(hours)} h</strong>'
+            f'</div>'
+        ) if hours is not None else ''
+
+        return (
+            f'<div style="padding:12px 14px;border:1px solid {GREY_BORDER};'
+            f'border-left:4px solid {RED};border-radius:6px;'
+            f'margin:8px 0;background:#ffffff;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+            f'<div style="font-size:13.5px;font-weight:600;color:{INK};">'
+            f'{machine}{comp_chip}'
+            f'</div>'
+            f'<div style="text-align:right;">{score_html}</div>'
+            f'</div>'
+            f'{hours_html}'
+            f'</div>'
+        )
+
+    rows_html = "".join(_row(m) for m in machines)
+
+    inner = f"""
+        <div style="font-size:14px;color:{INK};line-height:1.55;margin-bottom:8px;">
+          <strong>{n}</strong> {label} currently in the critical tier
+          (ML risk score &ge; 70). Highest-risk component and predicted
+          failure window for each:
+        </div>
+        {rows_html}
+        <div style="margin:18px 0 6px;">
+          {_button_html(DASHBOARD_URL, 'Open dashboard')}
+        </div>
+    """
+
+    plain_lines = [
+        f"[FHH] {n} critical {label} detected",
+        "",
+        f"{n} {label} currently in the critical tier (ML risk score >= 70).",
+        "",
+    ]
+    for m in machines:
+        machine = m.get("machine_name") or m.get("machine_id") or "?"
+        comp = m.get("component_name") or m.get("component_id") or ""
+        score = m.get("score")
+        hours = m.get("predicted_failure_window_hours")
+        score_part = f"score {int(score)}/100" if score is not None else ""
+        hours_part = (
+            f", predicted failure window {int(hours)} h"
+            if hours is not None else ""
+        )
+        comp_part = f" — {comp}" if comp else ""
+        plain_lines.append(f"  • {machine}{comp_part}: {score_part}{hours_part}")
+    plain_lines.append("")
+    plain_lines.append(f"Dashboard: {DASHBOARD_URL}")
+    plain_lines.append("")
+    plain_lines.append("— FHH AI Optimizer (automated message, do not reply)")
+    plain = "\n".join(plain_lines)
+
+    header_kicker = f"{n} critical {label}"
+    return subject, _wrap_html(inner, header_kicker=header_kicker, header_color=RED), plain
+
+
+# ---------------------------------------------------------------------------
 # 3. fleet_digest_email (notification_type=alert_critical)
 # ---------------------------------------------------------------------------
 

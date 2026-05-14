@@ -452,7 +452,7 @@ function SeverityPill({ severity }) {
   );
 }
 
-function RecentAlarmsPanel({ alarms }) {
+function RecentAlarmsPanel({ alarms, onViewAll }) {
   if (!alarms) return <PanelShell />;
   if (alarms.length === 0) {
     return (
@@ -471,8 +471,7 @@ function RecentAlarmsPanel({ alarms }) {
         <div style={panelHeader}>Recent Alarms ({alarms.length})</div>
         <button
           style={textBtn}
-          onClick={() => window.dispatchEvent(new CustomEvent("fhh:chat:send",
-            { detail: "Take me to the alerts page" }))}
+          onClick={() => onViewAll && onViewAll()}
           onMouseEnter={(e) => { e.currentTarget.style.color = "#1B3568"; e.currentTarget.style.textDecoration = "underline"; }}
           onMouseLeave={(e) => { e.currentTarget.style.color = "#0A1F44"; e.currentTarget.style.textDecoration = "none"; }}
         >View all →</button>
@@ -635,7 +634,7 @@ function _buildSyntheticAlert(machineId, componentId, machineName) {
 }
 
 // ────────────────────────────── Screen ──────────────────────────────
-function MachineDetailScreen({ machineId, onBack, onSelectComponent }) {
+function MachineDetailScreen({ machineId, onBack, onSelectComponent, onViewAllAlerts }) {
   const [machine, setMachine] = useStateMd(null);
   const [risk, setRisk] = useStateMd(null);
   const [components, setComponents] = useStateMd(null);
@@ -873,7 +872,10 @@ function MachineDetailScreen({ machineId, onBack, onSelectComponent }) {
         gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
         gap: 14, marginTop: 4,
       }}>
-        <RecentAlarmsPanel alarms={alarms} />
+        <RecentAlarmsPanel
+          alarms={alarms}
+          onViewAll={() => onViewAllAlerts && onViewAllAlerts(machineId)}
+        />
         <MaintenanceHistoryPanel
           logs={maintLog}
           machineId={machineId}

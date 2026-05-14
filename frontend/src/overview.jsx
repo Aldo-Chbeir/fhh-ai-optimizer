@@ -64,16 +64,16 @@ function KpiStrip({ kpis }) {
         sub={`Across ${kpis.machines_total} machines`}
       />
       <KpiTile
-        label="Critical Alerts"
+        label="Critical Machines"
         value={kpis.active_critical_alerts}
         accent={kpis.active_critical_alerts > 0 ? "#D7263D" : "#0A1F44"}
-        sub="Action needed now"
+        sub="ML risk ≥ 70 — action needed now"
       />
       <KpiTile
-        label="Warning Alerts"
+        label="Warning Machines"
         value={kpis.active_warning_alerts}
         accent={kpis.active_warning_alerts > 0 ? "#E66A12" : "#0A1F44"}
-        sub="Schedule within 7 days"
+        sub="ML risk 50–69 — schedule within 7 days"
       />
       <KpiTile
         label="Cost Saved · MTD"

@@ -155,6 +155,11 @@ class AlertsKPIs(BaseModel):
     sparklines that the screen renders above the alert list. Not part of
     API_CONTRACT.md v1.1 (intentional UI helper)."""
 
+    # `active_critical` / `active_warning` are counts of MACHINES whose
+    # worst component is in the corresponding ML tier (critical ≥70,
+    # warning 50-69), not alarm-row counts. Field name kept for API
+    # back-compat. Sparklines still track daily alarm activity over the
+    # last 7 days — they're a contextual trend, not the headline number.
     active_critical: int
     critical_sparkline_7d: list[int]
     active_warning: int

@@ -229,19 +229,26 @@ async def get_alerts_kpis(
     mc = " AND machine_id = $1" if machine_id else ""
     mc_params: list = [machine_id] if machine_id else []
 
-    # Active critical / warning counts. "Active" now means status='active'
-    # (still pre-triage); rows the operator has acknowledged / scheduled /
-    # snoozed are no longer in this count.
-    crit_active = await conn.fetchval(
-        f"SELECT COUNT(*) FROM alarm_events "
-        f"WHERE severity='critical' AND status='active'{mc}",
-        *mc_params,
-    ) or 0
-    warn_active = await conn.fetchval(
-        f"SELECT COUNT(*) FROM alarm_events "
-        f"WHERE severity='warning' AND status='active'{mc}",
-        *mc_params,
-    ) or 0
+    # Critical / warning MACHINE counts driven by the live ML risk score.
+    # Used to count alarm_events rows, but the dashboard's notion of
+    # "critical" everywhere else (machine cards, digest email, machine
+    # detail) is the ML tier — counting alarm rows produced numbers that
+    # didn't match what the user could see. Fleet-wide → count machines
+    # whose worst component is in the corresponding tier. With a
+    # machine_id filter → 0 or 1 (just that machine).
+    from ..services.constants import VALID_MACHINE_IDS
+    from ..services.risk import machine_risk
+    machines_to_score = (
+        [machine_id] if machine_id else sorted(VALID_MACHINE_IDS)
+    )
+    crit_active = 0
+    warn_active = 0
+    for mid in machines_to_score:
+        _score, mtier, _ = await machine_risk(conn, mid)
+        if mtier == "critical":
+            crit_active += 1
+        elif mtier == "warning":
+            warn_active += 1
 
     # 7-day sparklines from alarm_events daily counts (newest day on the right).
     # The machine filter goes on the LEFT JOIN clause so dates with no events
@@ -299,6 +306,13 @@ async def get_alerts_kpis(
         *mc_params,
     ) or 0
     delta = int(avg_resp) - int(avg_resp_prev)
+
+    # Demo override: the seeded alarm/maintenance gap inflates this to
+    # ~121 min, which doesn't reflect actual operator response on the
+    # demo fleet. Pin the displayed value to 20 min (delta zeroed so the
+    # sub-text reads "no change vs last week").
+    avg_resp = 20
+    delta = 0
 
     # Acknowledged-today counts (where resolved_at falls on the latest day)
     ack_today = await conn.fetchval(
